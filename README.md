@@ -50,8 +50,9 @@ The device IP is printed to the serial monitor on boot and is shown on the `/set
 
 ## Prerequisites
 
-- **ESP-IDF v5.3.2 LTS** *(stable, recommended)* — [installation guide](https://docs.espressif.com/projects/esp-idf/en/v5.3.2/esp32s3/get-started/)
-  **or ESP-IDF v6.0** *(beta)* — see [IDF v6 build notes](#idf-v60-beta) below
+- **ESP-IDF v5.3.2 LTS** *(stable, recommended)* — run `bash setup_idf.sh` to install automatically,
+  or follow the [manual installation guide](https://docs.espressif.com/projects/esp-idf/en/v5.3.2/esp32s3/get-started/)
+  **or ESP-IDF v6.0** *(beta)* — must be installed manually to `~/esp/esp-idf-v6`; see [IDF v6 build notes](#idf-v60-beta) below (`setup_idf.sh` handles v5 only)
 - Python 3.10+ (v5 scripts), Python 3.11 (v6 managed component toolchain)
 - **Espressif BLE Provisioning** app — [iOS](https://apps.apple.com/app/esp-ble-provisioning/id1473590141) / [Android](https://play.google.com/store/apps/details?id=com.espressif.provble)
 - An MQTT broker on your local network (e.g., Mosquitto)
