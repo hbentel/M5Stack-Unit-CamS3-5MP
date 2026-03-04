@@ -3,24 +3,14 @@
 # Usage: ./monitor.sh [port]
 #   port: optional, e.g. /dev/cu.usbmodem1101
 # Exit with Ctrl+]
+#
+# Works for both IDF v5 and v6 builds — idf.py monitor decodes crash addresses
+# from the ELF file's DWARF info, so the IDF version used here does not matter.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-IDF_DIR="${IDF_PATH:-$HOME/esp/esp-idf}"
-
-if [ ! -f "$IDF_DIR/export.sh" ]; then
-    echo "ERROR: ESP-IDF not found at $IDF_DIR"
-    echo "Run ./setup_idf.sh first."
-    exit 1
-fi
-
-# Use native arm64 Python on Apple Silicon
-if [ -x /usr/bin/python3 ]; then
-    export PATH="/usr/bin:$PATH"
-fi
-
-source "$IDF_DIR/export.sh" 2>/dev/null
+source "$SCRIPT_DIR/idf_env.sh"
 
 cd "$SCRIPT_DIR"
 

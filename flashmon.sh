@@ -11,7 +11,15 @@ source "$SCRIPT_DIR/idf_env.sh"
 
 cd "$SCRIPT_DIR"
 
-# Set target if needed
+# If the existing cmake cache was built with a different IDF (e.g. v6), clean
+# before rebuilding with v5 — mismatched caches cause picolibc errors.
+V5_IDF="$HOME/esp/esp-idf"
+CACHED_IDF=$(grep "^IDF_PATH:INTERNAL=" build/CMakeCache.txt 2>/dev/null | cut -d= -f2- || true)
+if [ -n "$CACHED_IDF" ] && [ "$CACHED_IDF" != "$V5_IDF" ]; then
+    echo "Detected v6 build artifacts — cleaning before v5 build..."
+    rm -rf build sdkconfig
+fi
+
 if [ ! -f "build/config/sdkconfig.h" ]; then
     echo "Setting target to esp32s3..."
     idf.py set-target esp32s3
