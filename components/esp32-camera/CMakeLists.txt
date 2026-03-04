@@ -28,7 +28,6 @@ set(COMPONENT_ADD_INCLUDEDIRS
 )
 
 set(COMPONENT_PRIV_INCLUDEDIRS
-    conversions/private_include
     driver/private_include
     sensors/private_include
     target/private_include

@@ -1,2 +1,12 @@
-description: Forked ESP32-S3 camera driver for M5Stack Unit CamS3-5MP (PY260/mega_ccm), JPEG-only capture with Wi-Fi-stable ISR behavior.
-url: https://github.com/espressif/esp32-camera
+description: >
+  Forked ESP32-S3 camera driver for M5Stack Unit CamS3-5MP (PY260/mega_ccm sensor).
+  JPEG-only capture, Wi-Fi-stable VSYNC ISR pinned to Core 1, IDF v5 and v6 compatible.
+  Stripped of all RAW/RGB/YUV paths. Not a drop-in replacement for the upstream driver.
+
+url: https://github.com/hbentel/M5Stack-Unit-CamS3-5MP
+upstream_url: https://github.com/espressif/esp32-camera
+
+license: Apache-2.0
+
+maintainers:
+  - hbentel

@@ -2,7 +2,7 @@ menu "UnitCamS3 Firmware Configuration"
 
 config UNITCAMS3_MQTT_BROKER_URL
     string "MQTT broker URL"
-    default "mqtt://192.168.50.189"
+    default "mqtt://your-broker-ip"
 
 config UNITCAMS3_MQTT_USER
     string "MQTT username"

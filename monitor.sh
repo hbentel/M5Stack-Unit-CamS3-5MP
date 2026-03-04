@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Open serial monitor for the UnitCamS3-5MP.
 # Usage: ./monitor.sh [port]
-#   port: optional, e.g. /dev/cu.usbmodem1101
+#   port: optional, e.g. /dev/cu.usbmodem1101 (macOS) or /dev/ttyACM0 (Linux)
 # Exit with Ctrl+]
 #
 # Works for both IDF v5 and v6 builds — idf.py monitor decodes crash addresses
@@ -18,13 +18,15 @@ PORT_ARG=""
 if [ -n "${1:-}" ]; then
     PORT_ARG="-p $1"
 else
-    DETECTED=$(ls /dev/cu.usbmodem* 2>/dev/null | head -1 || true)
+    # Auto-detect: macOS native USB, Linux CDC-ACM, Linux UART-bridge
+    DETECTED=$(ls /dev/cu.usbmodem* /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | head -1 || true)
     if [ -n "$DETECTED" ]; then
         echo "Auto-detected port: $DETECTED"
         PORT_ARG="-p $DETECTED"
     else
         echo "No port specified and none auto-detected."
-        echo "Plug in the board and try: ./monitor.sh /dev/cu.usbmodemXXXX"
+        echo "Plug in the board and try: ./monitor.sh /dev/cu.usbmodemXXXX  (macOS)"
+        echo "                       or: ./monitor.sh /dev/ttyACM0           (Linux)"
         exit 1
     fi
 fi

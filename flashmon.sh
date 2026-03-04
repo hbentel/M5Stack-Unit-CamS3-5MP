@@ -29,7 +29,8 @@ PORT_ARG=""
 if [ -n "${1:-}" ]; then
     PORT_ARG="-p $1"
 else
-    DETECTED=$(ls /dev/cu.usbmodem* 2>/dev/null | head -1 || true)
+    # Auto-detect: macOS native USB, Linux CDC-ACM, Linux UART-bridge
+    DETECTED=$(ls /dev/cu.usbmodem* /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | head -1 || true)
     if [ -n "$DETECTED" ]; then
         echo "Auto-detected port: $DETECTED"
         PORT_ARG="-p $DETECTED"

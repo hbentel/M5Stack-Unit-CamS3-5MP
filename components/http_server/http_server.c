@@ -510,13 +510,15 @@ static void factory_reset_task(void *arg)
 static esp_err_t factory_reset_handler(httpd_req_t *req)
 {
     ESP_LOGW(TAG, "Factory reset requested — erasing NVS and rebooting");
-    static const char *resp_html =
+    char resp_html[512];
+    snprintf(resp_html, sizeof(resp_html),
         "<!DOCTYPE html><html><head><meta charset='utf-8'></head><body>"
         "<h2>Factory Reset</h2>"
         "<p>NVS erased. Device is rebooting into BLE provisioning mode.</p>"
         "<p>Use the <strong>Espressif BLE Provisioning</strong> app to reconnect "
-        "(<strong>PROV_unitcams3</strong>), then visit /setup to reconfigure.</p>"
-        "</body></html>";
+        "(<strong>PROV_%s</strong>), then visit /setup to reconfigure.</p>"
+        "</body></html>",
+        config_mgr_get_device_id());
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, resp_html, strlen(resp_html));
     xTaskCreate(factory_reset_task, "factory_rst", 4096, NULL, 5, NULL);
