@@ -1,0 +1,113 @@
+# ==============================================================================
+# CORE HARDWARE TARGET & CPU (ESP32-S3 @ 240MHz)
+# ==============================================================================
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
+CONFIG_ESP32S3_DEFAULT_CPU_FREQ_MHZ=240
+
+# ==============================================================================
+# FLASH CONFIGURATION (16MB QIO)
+# ==============================================================================
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+
+# ==============================================================================
+# PARTITION TABLE & OTA
+# ==============================================================================
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+CONFIG_PARTITION_TABLE_MD5=y
+CONFIG_APP_UPDATE=y
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# ==============================================================================
+# MEMORY & PSRAM (Aggressively Tuned for Camera DMA)
+# ==============================================================================
+CONFIG_ESP32S3_SPIRAM_SUPPORT=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_40M=y
+
+# Do NOT move code/rodata to PSRAM — competes with DMA frame writes on OPI bus
+# CONFIG_SPIRAM_FETCH_INSTRUCTIONS is not set
+# CONFIG_SPIRAM_RODATA is not set
+
+# Standard heap allocations go to PSRAM
+CONFIG_SPIRAM_USE_MALLOC=y
+# Keep small allocations (<16KB) in internal RAM for performance
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+# Reserve internal SRAM specifically for DMA and ISRs (cannot use PSRAM for DMA)
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
+
+# ==============================================================================
+# RTOS, SYSTEM OPTIMIZATION & WATCHDOGS
+# ==============================================================================
+CONFIG_FREERTOS_HZ=1000
+CONFIG_FREERTOS_SMP=y
+CONFIG_COMPILER_OPTIMIZATION_DEFAULT=y
+# CONFIG_COMPILER_OPTIMIZATION_PERF is not set
+
+CONFIG_ESP_INT_WDT_TIMEOUT_MS=1500
+CONFIG_INT_WDT_TIMEOUT_MS=1500
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# ==============================================================================
+# CAMERA DRIVER (MEGA_CCM / PY260 only, JPEG only)
+# ==============================================================================
+CONFIG_MEGA_CCM_SUPPORT=y
+CONFIG_SCCB_HARDWARE_I2C_PORT0=y
+CONFIG_SCCB_CLK_FREQ=100000
+CONFIG_CAMERA_CORE1=y
+CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX=65536
+
+# ==============================================================================
+# CORE DUMP (to flash, ELF format)
+# ==============================================================================
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+
+# ==============================================================================
+# OTA (allow plain HTTP for local network updates)
+# ==============================================================================
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
+CONFIG_LWIP_MAX_SOCKETS=16
+
+# ==============================================================================
+# HTTP SERVER
+# Default 512B header parse buffer is too small for browser POST requests
+# (User-Agent + Accept + Content-Type + Referer + Origin easily exceeds 512B)
+# ==============================================================================
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+
+# ==============================================================================
+# BLUETOOTH (NimBLE — required for wifi_provisioning BLE scheme)
+# First-boot: device advertises as "PROV_unitcams3" in Espressif Provisioning app
+# Credentials stored in NVS; subsequent boots connect directly (BLE not active)
+# ==============================================================================
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y
+
+# IDF v6-beta bug: cache_utils.c line 202 debug assertion calls xTaskGetSchedulerState()
+# (-> vPortTakeLock, not IRAM_ATTR) BEFORE spi_flash_restore_cache().
+# Disabling assertions (NDEBUG) skips that code path and is correct for production firmware.
+CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE=y
+
+# IDF v6: FreeRTOS-SMP places critical-section functions in flash by default.
+# On ESP32-S3 with PSRAM, flash cache is disabled during flash/NVS operations.
+# Any IRAM ISR (e.g. SysTick) that calls vTaskEnterCriticalFromISR() will crash
+# (EXCCAUSE=7) if those functions are in flash cache. Place FreeRTOS in IRAM.
+CONFIG_FREERTOS_IN_IRAM=y
+
+# ==============================================================================
+# UNITCAMS3 APPLICATION DEFAULTS
+# Override via: idf.py menuconfig -> "UnitCamS3 Firmware Configuration"
+# ==============================================================================
+CONFIG_UNITCAMS3_DEVICE_ID="unitcams3"

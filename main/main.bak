@@ -1,0 +1,45 @@
+#include <stdio.h>
+#include "esp_log.h"
+#include "esp_system.h"
+#include "esp_chip_info.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "hw_validate.h"
+
+static const char *TAG = "main";
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "========================================");
+    ESP_LOGI(TAG, "  UnitCamS3-5MP Custom Firmware");
+    ESP_LOGI(TAG, "  Phase 0: Hardware Validation");
+    ESP_LOGI(TAG, "========================================");
+
+    /* Print chip info */
+    esp_chip_info_t chip;
+    esp_chip_info(&chip);
+    ESP_LOGI(TAG, "Chip: ESP32-S3, cores=%d, rev=%d", chip.cores, chip.revision);
+
+    /* Step 1: Validate PSRAM */
+    ESP_LOGI(TAG, "--- PSRAM Validation ---");
+    esp_err_t ret = hw_validate_psram();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "PSRAM validation FAILED. Halting.");
+        while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+    }
+    ESP_LOGI(TAG, "PSRAM validation PASSED");
+
+    /* Step 2: Validate I2C sensor */
+    ESP_LOGI(TAG, "--- I2C Sensor Validation ---");
+    ret = hw_validate_i2c_sensor();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "I2C sensor validation FAILED. Halting.");
+        while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+    }
+    ESP_LOGI(TAG, "I2C sensor validation PASSED");
+
+    /* Phase 0 complete */
+    ESP_LOGI(TAG, "========================================");
+    ESP_LOGI(TAG, "  Phase 0 COMPLETE - All hardware OK");
+    ESP_LOGI(TAG, "========================================");
+}

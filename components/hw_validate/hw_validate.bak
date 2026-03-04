@@ -1,0 +1,113 @@
+#include "hw_validate.h"
+
+#include <string.h>
+#include "esp_log.h"
+#include "esp_heap_caps.h"
+#include "esp_psram.h"
+#include "driver/i2c_master.h"
+#include "freertos/FreeRTOS.h"
+#include "driver/gpio.h"
+#include "driver/ledc.h"
+
+static const char *TAG = "hw_validate";
+
+/* --------------------------------------------------------------------------
+ * UnitCamS3-5MP I2C pin definitions (from M5Stack schematic)
+ * -------------------------------------------------------------------------- */
+#define CAM_I2C_SDA_PIN     17
+#define CAM_I2C_SCL_PIN     41
+#define CAM_I2C_FREQ_HZ     400000
+
+/* PY260 default I2C slave address */
+#define PY260_I2C_ADDR       0x1F
+
+/* -------------------------------------------------------------------------- */
+
+esp_err_t hw_validate_psram(void)
+{
+    size_t psram_size = esp_psram_get_size();
+    if (psram_size == 0) {
+        ESP_LOGE(TAG, "PSRAM not detected! Check OPI PSRAM config.");
+        return ESP_FAIL;
+    }
+
+    size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+
+    ESP_LOGI(TAG, "PSRAM detected: %zu bytes total, %zu bytes free", psram_size, free_psram);
+    ESP_LOGI(TAG, "Internal SRAM free: %zu bytes", free_internal);
+
+    return ESP_OK;
+}
+
+esp_err_t hw_validate_i2c_sensor(void)
+{
+    /* Configure I2C master bus */
+    i2c_master_bus_config_t bus_cfg = {
+        .i2c_port = I2C_NUM_0,
+        .sda_io_num = CAM_I2C_SDA_PIN,
+        .scl_io_num = CAM_I2C_SCL_PIN,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+
+    i2c_master_bus_handle_t bus_handle;
+    esp_err_t ret = i2c_new_master_bus(&bus_cfg, &bus_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create I2C master bus: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    /* Scan for all devices on the bus (informational) */
+    ESP_LOGI(TAG, "Scanning I2C bus...");
+    for (uint8_t addr = 0x03; addr < 0x78; addr++) {
+        ret = i2c_master_probe(bus_handle, addr, pdMS_TO_TICKS(50));
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "  I2C device found at 0x%02X%s",
+                     addr, (addr == PY260_I2C_ADDR) ? " <-- PY260" : "");
+        }
+    }
+// 1. Take the camera out of hardware reset (GPIO 21)
+    gpio_set_direction(GPIO_NUM_21, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_21, 0); // Assert reset
+    vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level(GPIO_NUM_21, 1); // Release reset
+    vTaskDelay(pdMS_TO_TICKS(50));  // Give it time to boot up
+
+    // 2. Provide 20MHz XCLK to the camera on GPIO 11
+    ledc_timer_config_t timer_conf = {
+        .speed_mode       = LEDC_LOW_SPEED_MODE,
+        .timer_num        = LEDC_TIMER_0,
+        .duty_resolution  = LEDC_TIMER_1_BIT,
+        .freq_hz          = 20000000,  // 20 MHz
+        .clk_cfg          = LEDC_AUTO_CLK
+    };
+    ledc_timer_config(&timer_conf);
+
+    ledc_channel_config_t ch_conf = {
+        .speed_mode     = LEDC_LOW_SPEED_MODE,
+        .channel        = LEDC_CHANNEL_0,
+        .timer_sel      = LEDC_TIMER_0,
+        .intr_type      = LEDC_INTR_DISABLE,
+        .gpio_num       = 11,
+        .duty           = 1, // 50% duty cycle for 1-bit resolution
+        .hpoint         = 0
+    };
+    ledc_channel_config(&ch_conf);
+
+    // ... your i2c_master_probe(bus_handle, 0x1F, ...) goes immediately after this!
+
+    /* Verify PY260 specifically */
+    ret = i2c_master_probe(bus_handle, PY260_I2C_ADDR, pdMS_TO_TICKS(100));
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "PY260 sensor confirmed at 0x%02X", PY260_I2C_ADDR);
+    } else {
+        ESP_LOGE(TAG, "PY260 NOT found at 0x%02X! ret=%s", PY260_I2C_ADDR, esp_err_to_name(ret));
+    }
+
+    /* Tear down I2C bus — the camera driver will re-init it */
+    i2c_del_master_bus(bus_handle);
+
+    return ret;
+}

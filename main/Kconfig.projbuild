@@ -1,0 +1,27 @@
+menu "UnitCamS3 Firmware Configuration"
+
+config UNITCAMS3_MQTT_BROKER_URL
+    string "MQTT broker URL"
+    default "mqtt://192.168.50.189"
+
+config UNITCAMS3_MQTT_USER
+    string "MQTT username"
+    default ""
+
+config UNITCAMS3_MQTT_PASS
+    string "MQTT password"
+    default ""
+
+config UNITCAMS3_DEVICE_ID
+    string "Device ID (used as MQTT topic prefix and HA entity prefix)"
+    default "unitcams3"
+
+config UNITCAMS3_FPS_TEST_MODE
+    bool "FPS test mode (disables Wi-Fi, HTTP, MQTT — camera throughput measurement only)"
+    default n
+    help
+        When enabled the firmware skips all network services and runs the camera
+        in a tight loop reporting FPS to the serial console. NEVER enable this
+        in production — the device will not stream or respond to MQTT.
+
+endmenu

@@ -1,0 +1,56 @@
+menu "Camera configuration"
+    config MEGA_CCM_SUPPORT
+        bool "Support MEGA_CCM (PY260) 5MP"
+        default y
+        help
+            Enable MEGA_CCM (PY260) sensor support. This is the only
+            sensor supported on the M5Stack UnitCamS3-5MP board.
+
+    choice SCCB_HARDWARE_I2C_PORT
+        bool "I2C peripheral to use for SCCB"
+        default SCCB_HARDWARE_I2C_PORT0
+
+        config SCCB_HARDWARE_I2C_PORT0
+            bool "I2C0"
+        config SCCB_HARDWARE_I2C_PORT1
+            bool "I2C1"
+    endchoice
+
+    config SCCB_CLK_FREQ
+        int "SCCB clk frequency"
+        default 400000
+        range 1000 400000
+        help
+            I2C clock frequency for SCCB communication with the PY260.
+            400kHz is recommended for this sensor.
+
+    config CAMERA_TASK_STACK_SIZE
+        int "CAM task stack size"
+        default 2048
+        help
+            Camera task stack size
+
+    choice CAMERA_TASK_PINNED_TO_CORE
+        bool "Camera task pinned to core"
+        default CAMERA_CORE0
+        help
+            Pin the camera DMA/capture task to Core 0 per the firmware
+            architecture (Core 0 = camera + Wi-Fi, Core 1 = networking).
+
+        config CAMERA_CORE0
+            bool "CORE0"
+        config CAMERA_CORE1
+            bool "CORE1"
+        config CAMERA_NO_AFFINITY
+            bool "NO_AFFINITY"
+    endchoice
+
+    config CAMERA_DMA_BUFFER_SIZE_MAX
+        int "DMA buffer size"
+        range 8192 32768
+        default 32768
+        help
+            Maximum value of DMA buffer.
+            Larger values may fail to allocate due to insufficient
+            contiguous memory blocks.
+endmenu

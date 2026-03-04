@@ -1,0 +1,129 @@
+#include <stdio.h>
+#include "esp_log.h"
+#include "esp_system.h"
+#include "esp_chip_info.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "hw_validate.h"
+#include "esp_camera.h" // Phase 1: Camera Driver
+
+static const char *TAG = "main";
+
+// ========================================
+// Phase 1: UnitCamS3 Pin Map
+// ========================================
+#define CAM_PIN_PWDN    -1 // Tied to GND
+#define CAM_PIN_RESET   21
+#define CAM_PIN_XCLK    11
+#define CAM_PIN_SIOD    17 // SDA
+#define CAM_PIN_SIOC    41 // SCL
+
+#define CAM_PIN_D7      13 // Y9
+#define CAM_PIN_D6      4  // Y8
+#define CAM_PIN_D5      10 // Y7
+#define CAM_PIN_D4      5  // Y6
+#define CAM_PIN_D3      7  // Y5
+#define CAM_PIN_D2      16 // Y4
+#define CAM_PIN_D1      15 // Y3
+#define CAM_PIN_D0      6  // Y2
+#define CAM_PIN_VSYNC   42
+#define CAM_PIN_HREF    18
+#define CAM_PIN_PCLK    12
+
+// ========================================
+// Camera Configuration
+// ========================================
+static camera_config_t camera_config = {
+    .pin_pwdn = CAM_PIN_PWDN,
+    .pin_reset = CAM_PIN_RESET,
+    .pin_xclk = CAM_PIN_XCLK,
+    .pin_sccb_sda = CAM_PIN_SIOD,
+    .pin_sccb_scl = CAM_PIN_SIOC,
+
+    .pin_d7 = CAM_PIN_D7,
+    .pin_d6 = CAM_PIN_D6,
+    .pin_d5 = CAM_PIN_D5,
+    .pin_d4 = CAM_PIN_D4,
+    .pin_d3 = CAM_PIN_D3,
+    .pin_d2 = CAM_PIN_D2,
+    .pin_d1 = CAM_PIN_D1,
+    .pin_d0 = CAM_PIN_D0,
+    .pin_vsync = CAM_PIN_VSYNC,
+    .pin_href = CAM_PIN_HREF,
+    .pin_pclk = CAM_PIN_PCLK,
+
+    // Phase 1 constraints: 20MHz XCLK, JPEG only
+    .xclk_freq_hz = 20000000,
+    .ledc_timer = LEDC_TIMER_0,
+    .ledc_channel = LEDC_CHANNEL_0,
+
+    .pixel_format = PIXFORMAT_JPEG, 
+    .frame_size = FRAMESIZE_VGA,    // 640x480 resolution for test
+    .jpeg_quality = 12,             // 0-63 (lower means higher quality)
+    .fb_count = 1,                  // Grab 1 frame to test PSRAM allocation
+    .fb_location = CAMERA_FB_IN_PSRAM,
+    .grab_mode = CAMERA_GRAB_WHEN_EMPTY
+};
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "========================================");
+    ESP_LOGI(TAG, "  UnitCamS3-5MP Custom Firmware");
+    ESP_LOGI(TAG, "  Phase 1: Driver Initialization");
+    ESP_LOGI(TAG, "========================================");
+
+    /* Print chip info */
+    esp_chip_info_t chip;
+    esp_chip_info(&chip);
+    ESP_LOGI(TAG, "Chip: ESP32-S3, cores=%d, rev=%d", chip.cores, chip.revision);
+
+    /* Step 1: Validate PSRAM (Still strictly required!) */
+    ESP_LOGI(TAG, "--- PSRAM Validation ---");
+    esp_err_t ret = hw_validate_psram();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "PSRAM validation FAILED. Halting.");
+        while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+    }
+    ESP_LOGI(TAG, "PSRAM validation PASSED");
+
+    /* * NOTE: hw_validate_i2c_sensor() is intentionally skipped here 
+     * to prevent LEDC/I2C resource collisions with esp_camera_init(). 
+     */
+
+    /* Step 2: Initialize the Camera Driver */
+    ESP_LOGI(TAG, "--- Initializing Camera Driver ---");
+    esp_err_t err = esp_camera_init(&camera_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Camera Init Failed! Error: 0x%x", err);
+        while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+    }
+    ESP_LOGI(TAG, "Camera Driver Initialized PASSED");
+
+/* Step 3: Test Frame Capture */
+    ESP_LOGI(TAG, "--- Warming up sensor ---");
+    vTaskDelay(pdMS_TO_TICKS(2000)); // Give the sensor 2 seconds to stabilize
+
+    ESP_LOGI(TAG, "--- Capturing Test Frame ---");
+    
+    // The first frame after boot is almost always corrupted. 
+    // Grab it, drop it, and ask for a fresh one.
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (fb) {
+        esp_camera_fb_return(fb);
+        ESP_LOGI(TAG, "Discarded first frame. Capturing clean frame...");
+        fb = esp_camera_fb_get();
+    }
+
+    if (!fb) {
+        ESP_LOGE(TAG, "Frame capture failed! Still getting NO-SOI?");
+    } else {
+        ESP_LOGI(TAG, "Capture SUCCESS! Frame size: %zu bytes", fb->len);
+        ESP_LOGI(TAG, "Frame Dimensions: %dx%d, Format: %d", fb->width, fb->height, fb->format);
+        
+        esp_camera_fb_return(fb);
+    }
+
+    ESP_LOGI(TAG, "========================================");
+    ESP_LOGI(TAG, "  Phase 1 COMPLETE");
+    ESP_LOGI(TAG, "========================================");
+}

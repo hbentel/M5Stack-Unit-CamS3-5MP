@@ -1,0 +1,60 @@
+# ESP-IDF build artifacts
+build/
+sdkconfig
+sdkconfig.old
+dependencies.lock
+managed_components/
+
+# Python virtual environment
+.venv/
+__pycache__/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+*.swp
+*.swo
+
+# Secrets / local overrides (never commit real credentials)
+wifi.h
+.env
+
+# Claude Code session data
+.claude/
+claudememory/
+
+# Log files (build logs, serial captures, OTA debug logs)
+*.log
+
+# Tool / OS caches
+.cache/
+
+# Schematics (copyrighted hardware docs — link to manufacturer instead)
+*.pdf
+
+# Internal dev artifacts
+STATUS.md
+progress.md
+driver_production_improvements.md
+email_to_m5stack.md
+GEMINI.md
+simplification.md
+Combined_latest_plan.md
+automation_plan.md
+current_frigate_config.txt
+mqtt_test.py
+read_serial.py
+reset_to_download.py
+patch.c
+
+# Original demo source (reference only, not part of this project)
+original_UnitCamS3-UserDemo-unitcams3-5mp/
+
+# Dev notes / scratch files
+*.local.md
+pinmap.md
+notes*.md
+plan*.md
+memory/
