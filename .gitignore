@@ -36,6 +36,7 @@ claudememory/
 *.pdf
 
 # Internal dev artifacts
+*.bak 
 STATUS.md
 progress.md
 driver_production_improvements.md
