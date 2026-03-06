@@ -19,7 +19,6 @@ __pycache__/
 *.swo
 
 # Secrets / local overrides (never commit real credentials)
-wifi.h
 .env
 
 # Claude Code session data
