@@ -59,6 +59,45 @@ The device IP is printed to the serial monitor on boot and is shown on the `/set
 
 ---
 
+## Pre-built Firmware
+
+Each [GitHub Release](https://github.com/hbentel/M5Stack-Unit-CamS3-5MP/releases)
+includes firmware binaries built by GitHub Actions directly from the tagged source:
+
+| File | Use |
+|------|-----|
+| `unitcams3_merged.bin` | **Recommended** — single file, flash at offset `0x0` |
+| `unitcams3_firmware.bin` | App partition only (OTA updates) |
+| `bootloader.bin`, `partition-table.bin`, `ota_data_initial.bin` | Individual regions |
+
+### Flash the merged binary (no build required)
+
+Put the device in [Download Mode](#2-download-mode-m5stack-unit-cams3-5mp), then:
+
+```bash
+pip install esptool
+esptool.py --chip esp32s3 -b 460800 \
+  --before default_reset --after hard_reset \
+  write_flash --flash_mode dio --flash_freq 80m --flash_size 16MB \
+  0x0 unitcams3_merged.bin
+```
+
+### Verify provenance (optional)
+
+Every release binary is cryptographically attested by GitHub Actions. To confirm
+the binary you downloaded was built from the published source — not modified by
+anyone — install the [GitHub CLI](https://cli.github.com/) and run:
+
+```bash
+gh attestation verify unitcams3_merged.bin \
+  --repo hbentel/M5Stack-Unit-CamS3-5MP
+```
+
+A passing result means the binary is provably linked to a specific Actions run
+and source commit. No trust in the uploader required.
+
+---
+
 ## Build & Flash
 
 ### 1. Clone

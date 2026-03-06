@@ -3,6 +3,7 @@ name: Build
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
 
@@ -10,6 +11,10 @@ jobs:
   build:
     name: IDF v5.3.2 / esp32s3
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: write       # needed to upload release assets
+      id-token:  write      # needed for provenance attestation
 
     steps:
       - uses: actions/checkout@v4
@@ -20,3 +25,35 @@ jobs:
           target: esp32s3
           path: "."
           command: idf.py build
+
+      # Merge all flash regions into one file — simpler for users doing a first flash.
+      # Offsets match partition-table.csv (bootloader 0x0, pt 0x8000, otadata 0x11000, app 0x20000).
+      - name: Create merged firmware binary
+        run: |
+          pip install esptool --quiet
+          esptool.py --chip esp32s3 merge_bin \
+            --output build/unitcams3_merged.bin \
+            0x0      build/bootloader/bootloader.bin \
+            0x8000   build/partition_table/partition-table.bin \
+            0x11000  build/ota_data_initial.bin \
+            0x20000  build/unitcams3_firmware.bin
+
+      # Attest provenance for the merged binary.
+      # Creates a signed SLSA statement on GitHub's transparency log.
+      # Verify with: gh attestation verify unitcams3_merged.bin --repo hbentel/M5Stack-Unit-CamS3-5MP
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: build/unitcams3_merged.bin
+
+      # Upload binaries to the GitHub Release (only runs on tag pushes).
+      - name: Upload firmware to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/unitcams3_merged.bin
+            build/unitcams3_firmware.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/ota_data_initial.bin
