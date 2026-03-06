@@ -206,7 +206,7 @@ http://<device-ip>/setup
 | MQTT Password | Leave blank if broker has no auth | _(empty)_ |
 | Device ID | MQTT topic prefix and HA entity prefix | `unitcams3` |
 | Enable MQTT | Toggle MQTT on/off | enabled |
-| Camera Resolution | VGA / SVGA / XGA / UXGA | VGA (640×480) |
+| Camera Resolution | QVGA / VGA / HD / UXGA | VGA (640×480) |
 | JPEG Quality | 1 (best) – 63 (lowest) | 12 |
 
 Submit the form — the device saves the values to NVS and reboots. Settings persist
@@ -282,9 +282,9 @@ All topics use the **Device ID** as a prefix (default: `unitcams3`).
 
 | Topic | Payload | Effect |
 |-------|---------|--------|
-| `unitcams3/brightness/set` | `-2` to `2` | Set sensor brightness |
-| `unitcams3/contrast/set` | `-2` to `2` | Set sensor contrast |
-| `unitcams3/saturation/set` | `-2` to `2` | Set sensor saturation |
+| `unitcams3/brightness/set` | `0` to `8` | Set sensor brightness |
+| `unitcams3/contrast/set` | `0` to `6` | Set sensor contrast |
+| `unitcams3/saturation/set` | `0` to `6` | Set sensor saturation |
 | `unitcams3/wb_mode/set` | `0`–`4` | White balance (0=Auto, 1=Sun, 2=Cloud, 3=Office, 4=Home) |
 | `unitcams3/restart` | _(any)_ | Trigger `esp_restart()` |
 | `unitcams3/ota/set` | URL string | Trigger OTA update |
