@@ -8,7 +8,7 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  build-v5:
     name: IDF v5.3.2 / esp32s3
     runs-on: ubuntu-latest
 
@@ -57,3 +57,17 @@ jobs:
             build/bootloader/bootloader.bin
             build/partition_table/partition-table.bin
             build/ota_data_initial.bin
+
+  build-v6:
+    name: IDF v6.0 / esp32s3
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.0.0
+          target: esp32s3
+          path: "."
+          command: idf.py build

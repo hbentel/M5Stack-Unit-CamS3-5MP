@@ -5,6 +5,7 @@ video over HTTP, integrates with [Frigate NVR](https://frigate.video) and
 [Home Assistant](https://www.home-assistant.io) via MQTT, and supports
 over-the-air firmware updates triggered from an MQTT broker.
 
+[![Build](https://github.com/hbentel/M5Stack-Unit-CamS3-5MP/actions/workflows/build.yml/badge.svg)](https://github.com/hbentel/M5Stack-Unit-CamS3-5MP/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 ---
@@ -103,7 +104,7 @@ and source commit. No trust in the uploader required.
 ### 1. Clone
 
 ```bash
-git clone <repo-url> esp32camera
+git clone https://github.com/hbentel/M5Stack-Unit-CamS3-5MP.git esp32camera
 cd esp32camera
 ```
 
