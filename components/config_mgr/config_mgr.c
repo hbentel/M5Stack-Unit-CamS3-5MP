@@ -23,8 +23,8 @@ static const char *TAG = "config_mgr";
 #define MQTT_PASS_MAX  64
 #define DEVICE_ID_MAX  32
 
-/* Default framesize: FRAMESIZE_VGA = 8 */
-#define DEFAULT_CAM_RES   8
+/* Default framesize: FRAMESIZE_VGA = 10 */
+#define DEFAULT_CAM_RES   10
 #define DEFAULT_JPEG_QUAL 12
 
 /* In-memory config state */
@@ -99,6 +99,21 @@ esp_err_t config_mgr_init(void)
     load_u8(nh, KEY_CAM_RES,   &s_cam_res,    DEFAULT_CAM_RES);
     load_u8(nh, KEY_JPEG_QUAL, &s_jpeg_qual,  DEFAULT_JPEG_QUAL);
     s_mqtt_en = (mqtt_en_u8 != 0);
+
+    /* Validate cam_res against PY260-supported framesizes.
+     * Reject values that mega_ccm.c does not handle — previously stored
+     * values (e.g. 8=CIF, 9=HVGA from before the enum fix) would cause
+     * esp_camera_init() to fail. Reset to default if invalid. */
+    static const uint8_t valid_res[] = {0, 1, 6, 7, 10, 13, 15, 16, 24}; // PY260-supported only; excludes SVGA(11) and XGA(12)
+    bool res_valid = false;
+    for (int i = 0; i < (int)sizeof(valid_res); i++) {
+        if (s_cam_res == valid_res[i]) { res_valid = true; break; }
+    }
+    if (!res_valid) {
+        ESP_LOGW(TAG, "cam_res=%u not supported by PY260 — resetting to VGA (%u)",
+                 s_cam_res, DEFAULT_CAM_RES);
+        s_cam_res = DEFAULT_CAM_RES;
+    }
 
     nvs_close(h);
 

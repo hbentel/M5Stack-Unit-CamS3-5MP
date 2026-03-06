@@ -101,21 +101,21 @@ static void send_ha_discovery(void)
     publish_discovery("sensor", "recovery_count", "Recovery Events", NULL, NULL, NULL, state_topic, 0, 0);
 
     // Controls
-    // Brightness (-2 to 2)
+    // Brightness (0 to 8, driver range in mega_ccm.c)
     char cmd_topic[128];
     snprintf(state_topic, sizeof(state_topic), "%s/brightness", base_topic);
     snprintf(cmd_topic, sizeof(cmd_topic), "%s/brightness/set", base_topic);
-    publish_discovery("number", "brightness", "Brightness", NULL, NULL, cmd_topic, state_topic, -2, 2);
+    publish_discovery("number", "brightness", "Brightness", NULL, NULL, cmd_topic, state_topic, 0, 8);
 
-    // Contrast (-2 to 2)
+    // Contrast (0 to 6, driver range in mega_ccm.c)
     snprintf(state_topic, sizeof(state_topic), "%s/contrast", base_topic);
     snprintf(cmd_topic, sizeof(cmd_topic), "%s/contrast/set", base_topic);
-    publish_discovery("number", "contrast", "Contrast", NULL, NULL, cmd_topic, state_topic, -2, 2);
+    publish_discovery("number", "contrast", "Contrast", NULL, NULL, cmd_topic, state_topic, 0, 6);
 
-    // Saturation (-2 to 2)
+    // Saturation (0 to 6, driver range in mega_ccm.c)
     snprintf(state_topic, sizeof(state_topic), "%s/saturation", base_topic);
     snprintf(cmd_topic, sizeof(cmd_topic), "%s/saturation/set", base_topic);
-    publish_discovery("number", "saturation", "Saturation", NULL, NULL, cmd_topic, state_topic, -2, 2);
+    publish_discovery("number", "saturation", "Saturation", NULL, NULL, cmd_topic, state_topic, 0, 6);
     
     // AWB Mode (Switch? or Select? Number is easiest for now: 0=Auto, 1=Sunny, etc)
     snprintf(state_topic, sizeof(state_topic), "%s/wb_mode", base_topic);

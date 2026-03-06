@@ -351,9 +351,12 @@ esp_err_t ll_cam_config(cam_obj_t *cam, const camera_config_t *config)
     // Source clock: PLL_F160M (160 MHz). cam_clk_sel=2 selects this source.
     // cam_clkm_div_num must be a whole integer — a non-zero remainder means the
     // hardware silently truncates the divisor, producing the wrong XCLK and
-    // corrupting frames. Panic immediately at init if the requested frequency
-    // does not divide evenly into 160 MHz (valid choices: 10, 16, 20, 40, 80 MHz).
-    assert(160000000 % config->xclk_freq_hz == 0);
+    // corrupting frames. Return an error if the requested frequency does not
+    // divide evenly into 160 MHz (valid choices: 10, 16, 20, 40, 80 MHz).
+    if (160000000 % config->xclk_freq_hz != 0) {
+        ESP_LOGE(TAG, "XCLK %"PRIu32" Hz does not divide evenly into 160 MHz", (uint32_t)config->xclk_freq_hz);
+        return ESP_ERR_INVALID_ARG;
+    }
     LCD_CAM.cam_ctrl.cam_clkm_div_num = 160000000 / config->xclk_freq_hz;
     LCD_CAM.cam_ctrl.cam_clk_sel = 2; // 0: no clock  1: APLL  2: PLL_F160M
 

@@ -168,6 +168,9 @@ static int set_framesize(sensor_t *sensor, framesize_t framesize)
         ret = write_reg(sensor->slv_addr, RESOLUTION_REG, 0x08);
     }else if(framesize == FRAMESIZE_320x320){  //320x320
         ret = write_reg(sensor->slv_addr, RESOLUTION_REG, 0x09);
+    }else{
+        ESP_LOGE(TAG, "Unsupported framesize for PY260: %u", framesize);
+        ret = -1;
     }
     if (ret == 0) {
         ESP_LOGI(TAG, "Set framesize to: %ux%u", w, h);

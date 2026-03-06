@@ -26,9 +26,10 @@ menu "Camera configuration"
 
     config CAMERA_TASK_STACK_SIZE
         int "CAM task stack size"
-        default 2048
+        default 8192
         help
-            Camera task stack size
+            Stack size for the camera DMA capture task. 8192 bytes is
+            required for the PY260 JPEG capture path on ESP32-S3.
 
     choice CAMERA_TASK_PINNED_TO_CORE
         bool "Camera task pinned to core"

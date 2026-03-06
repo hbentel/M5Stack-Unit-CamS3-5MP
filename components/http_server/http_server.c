@@ -395,8 +395,8 @@ static void url_decode(char *dst, const char *src, size_t dst_size)
 /* GET /setup — HTML config form pre-filled with current values */
 static esp_err_t setup_get_handler(httpd_req_t *req)
 {
-    static const char *res_names[] = {"VGA (640x480)", "SVGA (800x600)", "XGA (1024x768)", "UXGA (1600x1200)"};
-    static const uint8_t res_vals[] = {8, 9, 10, 13};
+    static const char *res_names[] = {"QVGA (320x240)", "VGA (640x480)", "HD (1280x720)", "UXGA (1600x1200)"};
+    static const uint8_t res_vals[] = {6, 10, 13, 15}; // FRAMESIZE_QVGA/VGA/HD/UXGA — PY260-supported only
 
     /* Get device IP for display */
     esp_netif_ip_info_t ip_info = {0};
@@ -582,7 +582,7 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
     int cam_res = atoi(cam_res_s);
-    if (cam_res != 8 && cam_res != 9 && cam_res != 10 && cam_res != 13) {
+    if (cam_res != 6 && cam_res != 10 && cam_res != 13 && cam_res != 15) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid cam_res");
         return ESP_FAIL;
     }

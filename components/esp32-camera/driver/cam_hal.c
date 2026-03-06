@@ -40,7 +40,7 @@
 #endif // ESP_IDF_VERSION_MAJOR
 #define ESP_CAMERA_ETS_PRINTF ets_printf
 
-#define CAM_TASK_STACK (8192)
+#define CAM_TASK_STACK CONFIG_CAMERA_TASK_STACK_SIZE
 
 static const char *TAG = "cam_hal";
 static cam_obj_t *cam_obj = NULL;
@@ -658,6 +658,9 @@ esp_err_t cam_deinit(void)
     } else {
         ESP_LOGW(TAG, "cam_deinit: No task handle found");
     }
+    // Free ISR and GDMA before deleting the queues those ISRs write to.
+    ll_cam_deinit(cam_obj);
+
     if (cam_obj->event_queue) {
         vQueueDelete(cam_obj->event_queue);
     }
@@ -667,8 +670,6 @@ esp_err_t cam_deinit(void)
     if (cam_obj->frame_done_queue) {
         vQueueDelete(cam_obj->frame_done_queue);
     }
-
-    ll_cam_deinit(cam_obj);
     
     if (cam_obj->dma) {
         free(cam_obj->dma);
