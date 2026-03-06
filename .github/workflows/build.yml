@@ -28,11 +28,13 @@ jobs:
 
       # Merge all flash regions into one file — simpler for users doing a first flash.
       # Offsets match partition-table.csv (bootloader 0x0, pt 0x8000, otadata 0x11000, app 0x20000).
+      # Write merged binary to workspace root — build/ is owned by the
+      # Docker container from the previous step and is not writable here.
       - name: Create merged firmware binary
         run: |
           pip install esptool --quiet
-          esptool.py --chip esp32s3 merge_bin \
-            --output build/unitcams3_merged.bin \
+          esptool --chip esp32s3 merge-bin \
+            --output unitcams3_merged.bin \
             0x0      build/bootloader/bootloader.bin \
             0x8000   build/partition_table/partition-table.bin \
             0x11000  build/ota_data_initial.bin \
@@ -44,7 +46,7 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: build/unitcams3_merged.bin
+          subject-path: unitcams3_merged.bin
 
       # Upload binaries to the GitHub Release (only runs on tag pushes).
       - name: Upload firmware to release
@@ -52,7 +54,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            build/unitcams3_merged.bin
+            unitcams3_merged.bin
             build/unitcams3_firmware.bin
             build/bootloader/bootloader.bin
             build/partition_table/partition-table.bin
