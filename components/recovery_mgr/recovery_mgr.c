@@ -123,7 +123,7 @@ void recovery_mgr_report_error(recovery_error_t error)
 
     switch (error) {
     case RECOVERY_ERR_FRAME_TIMEOUT:
-    case RECOVERY_ERR_RTSP_SEND:
+    case RECOVERY_ERR_STREAM_SEND:
         s_reinit_count++;
         s_total_errors++;
         if (s_reinit_count > s_config.max_reinit_attempts) {

@@ -48,7 +48,7 @@ menu "Camera configuration"
 
     config CAMERA_DMA_BUFFER_SIZE_MAX
         int "DMA buffer size"
-        range 8192 32768
+        range 8192 65536
         default 32768
         help
             Maximum value of DMA buffer.
