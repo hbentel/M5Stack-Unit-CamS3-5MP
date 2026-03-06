@@ -303,6 +303,9 @@ All topics use the **Device ID** as a prefix (default: `unitcams3`).
 | 80 | `GET /api/coredump` | Download last crash dump (ELF format) |
 | 81 | `GET /stream` | MJPEG stream (used by Frigate) |
 
+### Setup Page
+<img width="910" height="821" alt="Screenshot 2026-03-06 at 9 30 31 AM" src="https://github.com/user-attachments/assets/1c5bb01d-a9c8-4c9a-956a-bdb8f7a98845" />
+
 ```bash
 curl http://<device-ip>/health
 curl http://<device-ip>/stats
@@ -345,6 +348,7 @@ DEVICE_SHA=$(curl -s http://<device-ip>/health | \
 `/health` embeds the SHA-256 of the ELF at build time via `esp_app_get_description()`.
 
 ---
+
 
 ## Troubleshooting
 
