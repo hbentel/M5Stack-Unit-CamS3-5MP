@@ -43,8 +43,11 @@ jobs:
       # Attest provenance for the merged binary.
       # Creates a signed SLSA statement on GitHub's transparency log.
       # Verify with: gh attestation verify unitcams3_merged.bin --repo hbentel/M5Stack-Unit-CamS3-5MP
+      # Attestation requires a public repo or GitHub Advanced Security.
+      # continue-on-error so the build stays green on private forks.
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
+        continue-on-error: true
         with:
           subject-path: unitcams3_merged.bin
 
@@ -69,7 +72,7 @@ jobs:
 
       - uses: espressif/esp-idf-ci-action@v1
         with:
-          esp_idf_version: v6.0.0
+          esp_idf_version: release-v6.0
           target: esp32s3
           path: "."
           command: idf.py build
