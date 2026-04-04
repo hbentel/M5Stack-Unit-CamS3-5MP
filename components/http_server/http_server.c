@@ -450,8 +450,14 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
         "<label>MQTT Password</label>"
         "<input type='password' name='mqtt_pass' value='%s'>"
         "</div>"
-        "<label>Device ID</label>"
-        "<input type='text' name='device_id' value='%s'>"
+        "<label>Device ID "
+        "<span title='Used as: mDNS hostname (&lt;id&gt;.local), MQTT topic prefix, "
+        "Home Assistant entity prefix, and BLE provisioning name (PROV_&lt;id&gt;). "
+        "Use lowercase letters, numbers and underscores only.' "
+        "style='font-weight:normal;cursor:help;color:#6b7280'>&#9432;</span>"
+        "</label>"
+        "<input type='text' name='device_id' value='%s' pattern='[a-z0-9_]+' "
+        "title='Lowercase letters, numbers and underscores only'>"
         "<label>Camera Resolution</label>"
         "<select name='cam_res'>",
         config_mgr_is_mqtt_enabled() ? " checked" : "",

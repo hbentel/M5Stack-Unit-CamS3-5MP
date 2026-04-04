@@ -19,6 +19,7 @@
 // Phase 8 Headers
 #include "ota_mgr.h"
 #include "config_mgr.h"
+#include "mdns.h"
 
 // 10MHz: hard ceiling — PY260 front porch too short at 16/20MHz regardless of ISR weight
 #define CAM_XCLK_FREQ_HZ 10000000
@@ -203,6 +204,14 @@ void app_main(void)
 
     ESP_LOGI(TAG, "--- Loading Config ---");
     config_mgr_init();
+
+    ESP_LOGI(TAG, "--- Starting mDNS ---");
+    mdns_init();
+    mdns_hostname_set(config_mgr_get_device_id());
+    mdns_instance_name_set("M5Stack UnitCamS3-5MP");
+    mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+    mdns_service_add(NULL, "_http", "_tcp", 81, NULL, 0);
+    ESP_LOGI(TAG, "mDNS hostname: %s.local", config_mgr_get_device_id());
 
     ESP_LOGI(TAG, "--- Starting MQTT Manager ---");
     if (config_mgr_is_mqtt_enabled()) {
