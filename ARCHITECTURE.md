@@ -177,7 +177,8 @@ the flag — preventing deliberate reboots from tripping the boot-loop threshold
 | `esp32-camera/` | Forked M5Stack driver — PY260/mega_ccm only, JPEG only, ISR on Core 1 |
 | `frame_pool/` | Pre-allocates 4 × 512 KB PSRAM buffers at boot; ring-buffer semantics |
 | `jpeg_validate/` | SOI/EOI boundary check + atomic drop counter |
-| `http_server/` | Port 80: snapshot, health, stats, coredump; Port 81: MJPEG stream |
+| `http_server/` | Port 80: snapshot, health (incl. `reset_reason`), stats, coredump, logs; Port 81: MJPEG stream |
+| `log_buf/` | 16 KB PSRAM ring buffer hooked into `esp_log_set_vprintf()`; exposes `log_buf_snapshot()` for `/api/logs` |
 | `mqtt_mgr/` | MQTT client, HA auto-discovery, telemetry every 10 s, command handling |
 | `ota_mgr/` | URL-based OTA via MQTT, RTC NOINIT URL storage, OTA callback registration |
 | `recovery_mgr/` | NVS boot-loop detection, 2-min health timer, planned-reboot signalling |
@@ -248,8 +249,10 @@ No factory partition. Both OTA slots are 5 MB to accommodate the BLE stack
 |------|------|
 | Camera resolution / quality | `GET /setup` browser page (persisted to NVS); compile-time defaults in `main/main.c` |
 | MQTT URL / credentials / device ID | `GET /setup` browser page (persisted to NVS); compile-time defaults via `idf.py menuconfig` |
+| Change mDNS hostname | Change Device ID on `/setup` — hostname is set from `config_mgr_get_device_id()` at boot |
 | Add HTTP endpoint | `components/http_server/http_server.c` |
 | Add MQTT sensor to HA | `components/mqtt_mgr/mqtt_mgr.c` — `send_ha_discovery()` |
 | Tune recovery thresholds | `components/recovery_mgr/recovery_mgr.c` — `recovery_config_t` |
 | Debug ISR / DMA issues | `components/esp32-camera/target/esp32s3/ll_cam.c` |
 | Debug frame capture | `components/esp32-camera/driver/cam_hal.c` |
+| View runtime logs without serial | `curl http://<device-ip>/api/logs` — `components/log_buf/log_buf.c` |

@@ -72,7 +72,8 @@ The VSYNC ISR has two hard requirements that must not be removed:
 | `esp32-camera/` | Forked M5Stack driver (PY260/mega_ccm only, JPEG only, ISR on Core 1) |
 | `frame_pool/` | Pre-allocates 4×512KB PSRAM buffers at boot; decouples camera from HTTP |
 | `jpeg_validate/` | Application-level SOI/EOI check + atomic drop counter |
-| `http_server/` | Port 80: snapshot `/`, health `/health`, stats `/stats`, coredump `/api/coredump`; Port 81: MJPEG stream `/stream` |
+| `log_buf/` | 16KB PSRAM ring buffer via `esp_log_set_vprintf()` hook; `log_buf_snapshot()` serves `/api/logs` |
+| `http_server/` | Port 80: snapshot `/`, health `/health` (incl. `reset_reason`), stats `/stats`, coredump `/api/coredump`, logs `/api/logs`; Port 81: MJPEG stream `/stream` |
 | `ota_mgr/` | URL-based OTA via MQTT — publish firmware URL to `unitcams3/ota/set` |
 | `mqtt_mgr/` | MQTT client, HA auto-discovery, telemetry every 10s, command handling |
 | `recovery_mgr/` | NVS boot-loop detection (threshold=3), safe mode, 2-min health timer, OTA rollback confirmation |
@@ -81,7 +82,7 @@ The VSYNC ISR has two hard requirements that must not be removed:
 
 | Port | Server | Endpoints |
 |------|--------|-----------|
-| 80 | Main | `GET /` snapshot, `GET /health` (JSON incl. `app_sha256`), `GET /stats`, `GET /api/coredump` |
+| 80 | Main | `GET /` snapshot, `GET /health` (JSON incl. `app_sha256`, `reset_reason`), `GET /stats`, `GET /api/coredump`, `GET /api/logs` |
 | 81 | Stream | `GET /stream` MJPEG (used by Frigate) |
 
 ### MQTT Topics

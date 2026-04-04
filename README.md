@@ -45,6 +45,8 @@ The device IP is printed to the serial monitor on boot and is shown on the `/set
 - **URL-based OTA** — publish firmware URL to MQTT; device flashes and reboots
 - **Recovery manager** — NVS boot-loop detection, 2-minute health timer, OTA rollback
 - **Core dump to flash** — download crash dumps via `GET /api/coredump`
+- **Web log viewer** — `GET /api/logs` returns the full boot and runtime log from a 16 KB PSRAM ring buffer
+- **mDNS** — device is reachable at `<device-id>.local` (e.g. `unitcams3.local`) in addition to its IP
 - **BLE Wi-Fi provisioning** — no hardcoded credentials; first-boot BLE setup
 
 ---
@@ -204,7 +206,7 @@ http://<device-ip>/setup
 | MQTT URL | `mqtt://host` or `mqtt://host:port` | compile-time default |
 | MQTT Username | Leave blank if broker has no auth | _(empty)_ |
 | MQTT Password | Leave blank if broker has no auth | _(empty)_ |
-| Device ID | MQTT topic prefix and HA entity prefix | `unitcams3` |
+| Device ID | MQTT topic prefix, HA entity prefix, and mDNS hostname (`<id>.local`) | `unitcams3` |
 | Enable MQTT | Toggle MQTT on/off | enabled |
 | Camera Resolution | QVGA / VGA / HD / UXGA | VGA (640×480) |
 | JPEG Quality | 1 (best) – 63 (lowest) | 12 |
@@ -229,6 +231,23 @@ On first boot (or after NVS erase) the device starts BLE advertising as
 4. The device connects, stores credentials in NVS, and reboots — BLE is not active on subsequent boots.
 
 To re-provision: erase NVS (see Troubleshooting below).
+
+---
+
+## mDNS
+
+Once connected to Wi-Fi the device advertises itself via mDNS. The hostname is
+the **Device ID** configured on the `/setup` page (default: `unitcams3`):
+
+```
+http://unitcams3.local/         # snapshot
+http://unitcams3.local:81/stream  # MJPEG stream
+```
+
+Most home routers and operating systems support mDNS out of the box (macOS,
+Windows 10+, iOS, Android, most Linux distros with Avahi). If you have two
+cameras on the same network they must each have a unique Device ID — configure
+one of them at `/setup` before mounting it.
 
 ---
 
@@ -298,9 +317,10 @@ All topics use the **Device ID** as a prefix (default: `unitcams3`).
 | 80 | `GET /` | Single JPEG snapshot |
 | 80 | `GET /setup` | Browser configuration page |
 | 80 | `POST /setup` | Save configuration and reboot |
-| 80 | `GET /health` | JSON: uptime, heap, PSRAM, JPEG drops, `app_sha256` |
+| 80 | `GET /health` | JSON: uptime, heap, PSRAM, JPEG drops, `app_sha256`, `reset_reason` |
 | 80 | `GET /stats` | JSON: camera FPS counters, Wi-Fi RSSI, memory |
 | 80 | `GET /api/coredump` | Download last crash dump (ELF format) |
+| 80 | `GET /api/logs` | Full boot + runtime log as plain text (16 KB PSRAM ring buffer) |
 | 81 | `GET /stream` | MJPEG stream (used by Frigate) |
 
 ### Setup Page
@@ -310,7 +330,12 @@ All topics use the **Device ID** as a prefix (default: `unitcams3`).
 curl http://<device-ip>/health
 curl http://<device-ip>/stats
 curl -o /tmp/snap.jpg http://<device-ip>/
+curl http://<device-ip>/api/logs    # full boot + runtime log
 ```
+
+The `reset_reason` field in `/health` shows why the device last rebooted:
+`power_on`, `software`, `panic`, `task_watchdog`, etc. Useful for diagnosing
+unexpected restarts without needing a serial monitor.
 
 ---
 
