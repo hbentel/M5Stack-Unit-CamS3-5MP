@@ -13,6 +13,7 @@
 #include <ctype.h>
 #include "esp_task_wdt.h"
 #include "esp_app_desc.h"
+#include "esp_system.h"
 #include "config_mgr.h"
 #include "recovery_mgr.h"
 #include "esp_netif.h"
@@ -134,16 +135,27 @@ static esp_err_t health_handler(httpd_req_t *req)
         snprintf(sha256_hex + i * 2, 3, "%02x", app->app_elf_sha256[i]);
     }
 
-    char buf[320];
+    static const char *reset_reasons[] = {
+        "unknown", "power_on", "external", "software",
+        "panic", "int_watchdog", "task_watchdog", "watchdog",
+        "deep_sleep", "brownout", "sdio", "usb", "jtag",
+        "efuse", "pwr_glitch", "cpu_lockup"
+    };
+    esp_reset_reason_t rr = esp_reset_reason();
+    const char *reset_str = (rr < (esp_reset_reason_t)(sizeof(reset_reasons)/sizeof(reset_reasons[0])))
+                            ? reset_reasons[rr] : "unknown";
+
+    char buf[384];
     int len = snprintf(buf, sizeof(buf),
         "{\"uptime_s\":%lld,"
         "\"heap_free\":%zu,"
         "\"internal_free\":%zu,"
         "\"psram_free\":%zu,"
         "\"jpeg_drops\":%lu,"
+        "\"reset_reason\":\"%s\","
         "\"app_sha256\":\"%s\"}",
         (long long)uptime_s, free_heap, free_internal, free_psram,
-        (unsigned long)drops, sha256_hex);
+        (unsigned long)drops, reset_str, sha256_hex);
 
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, len);
