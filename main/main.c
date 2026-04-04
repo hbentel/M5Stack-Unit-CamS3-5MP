@@ -98,12 +98,8 @@ static camera_config_t camera_config = {
 #define CAM_SPECIAL_EFFECT  0
 // White Balance Mode: 0 = Auto, 1 = Sunny, 2 = Cloudy, 3 = Office, 4 = Home
 #define CAM_WB_MODE         3
-// Auto White Balance: 0 = Disable, 1 = Enable
-#define CAM_AWB             1
 // Auto Exposure Control: 0 = Disable, 1 = Enable
 #define CAM_AEC             1
-// Auto Gain Control: 0 = Disable, 1 = Enable
-#define CAM_AGC             1
 
 static void apply_camera_settings(void)
 {
@@ -119,11 +115,9 @@ static void apply_camera_settings(void)
     if (s->set_contrast) s->set_contrast(s, CAM_CONTRAST);
     if (s->set_saturation) s->set_saturation(s, CAM_SATURATION);
     if (s->set_special_effect) s->set_special_effect(s, CAM_SPECIAL_EFFECT);
-    if (s->set_whitebal) s->set_whitebal(s, CAM_AWB);
-    if (s->set_awb_gain) s->set_awb_gain(s, CAM_AWB);
     if (s->set_wb_mode) s->set_wb_mode(s, CAM_WB_MODE);
     if (s->set_exposure_ctrl) s->set_exposure_ctrl(s, CAM_AEC);
-    if (s->set_gain_ctrl) s->set_gain_ctrl(s, CAM_AGC);
+    // set_whitebal, set_awb_gain, set_gain_ctrl are not implemented by PY260 (wired to set_dummy)
     
     ESP_LOGI(TAG, "Camera settings applied");
 }

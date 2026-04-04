@@ -323,6 +323,7 @@ esp_err_t ota_mgr_run_pending(void)
 
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "OTA complete — rebooting to new firmware");
+        recovery_mgr_signal_planned_reboot(); // prevent new firmware's first boot from counting as a crash
         vTaskDelay(pdMS_TO_TICKS(200));
         esp_restart();
         /* NOT REACHED */
