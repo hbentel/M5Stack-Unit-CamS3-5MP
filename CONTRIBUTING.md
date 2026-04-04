@@ -22,6 +22,7 @@ Open a GitHub issue and include:
 For camera stability issues (NO-SOI floods, frame truncation), include:
 - `curl http://<device-ip>/stats` output
 - `curl http://<device-ip>/health` output
+- `curl http://<device-ip>/api/logs` output (full boot log — no serial cable needed)
 
 ## Building
 
