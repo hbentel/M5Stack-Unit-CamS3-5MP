@@ -15,6 +15,7 @@
 #include "esp_app_desc.h"
 #include "esp_system.h"
 #include "config_mgr.h"
+#include "log_buf.h"
 #include "recovery_mgr.h"
 #include "esp_netif.h"
 #include "nvs_flash.h"
@@ -334,6 +335,23 @@ static esp_err_t stream_handler(httpd_req_t *req)
     ESP_LOGI(TAG, "MJPEG stream client disconnected after %lu frames",
              (unsigned long)frame_count);
     return res;
+}
+
+// Handler for "/api/logs" — return ring-buffered log output as plain text
+static esp_err_t logs_handler(httpd_req_t *req)
+{
+    size_t len;
+    char *snap = log_buf_snapshot(&len);
+    if (!snap) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "Log buffer unavailable");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t err = httpd_resp_send(req, snap, (ssize_t)len);
+    free(snap);
+    return err;
 }
 
 // Handler for "/api/coredump" — stream raw coredump partition
@@ -718,6 +736,14 @@ esp_err_t start_http_server(void)
             .user_ctx  = NULL
         };
         httpd_register_uri_handler(s_server, &coredump_uri);
+
+        httpd_uri_t logs_uri = {
+            .uri       = "/api/logs",
+            .method    = HTTP_GET,
+            .handler   = logs_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(s_server, &logs_uri);
 
         httpd_uri_t setup_get_uri = {
             .uri       = "/setup",

@@ -20,6 +20,7 @@
 #include "ota_mgr.h"
 #include "config_mgr.h"
 #include "mdns.h"
+#include "log_buf.h"
 
 // 10MHz: hard ceiling — PY260 front porch too short at 16/20MHz regardless of ISR weight
 #define CAM_XCLK_FREQ_HZ 10000000
@@ -173,6 +174,8 @@ void app_main(void)
         ESP_LOGE(TAG, "PSRAM validation FAILED. Halting.");
         while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
     }
+
+    log_buf_init(); // Start capturing logs to PSRAM ring buffer (non-fatal if PSRAM unavailable)
 
     ESP_LOGI(TAG, "--- Initializing Frame Pool ---");
     // 4 buffers x 512KB = 2.0MB fixed PSRAM usage
