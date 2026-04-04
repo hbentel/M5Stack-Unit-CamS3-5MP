@@ -2,9 +2,9 @@
 
 ## Supported Versions
 
-Only the latest commit on the `main` branch is supported.
-This is a single-device firmware project; there are no versioned releases with
-long-term security maintenance.
+Only the latest release and the current `main` branch are supported.
+This is a single-device firmware project; older releases do not receive
+backported security fixes — always use the latest release.
 
 ## Reporting a Vulnerability
 
@@ -39,6 +39,8 @@ reachable from untrusted networks, add a reverse proxy with authentication.
 ## Known Limitations
 
 - HTTP endpoints (`/`, `/stream`, `/health`, `/stats`, `/setup`, `/api/coredump`,
-  `/factory_reset`) have no authentication
+  `/api/logs`, `/factory_reset`) have no authentication
 - `/api/coredump` may expose stack frames and memory contents from the last crash
-- `/factory_reset` can be triggered by any client on the LAN
+- `/api/logs` exposes the full boot and runtime log, which may include IP addresses,
+  MQTT broker hostnames, and other configuration details visible in log output
+- `/factory_reset` can be triggered by any client on the LAN (POST required)
