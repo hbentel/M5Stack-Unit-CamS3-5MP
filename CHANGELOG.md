@@ -21,6 +21,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Internal RAM for stacks** — forced all task stacks to internal SRAM to prevent
+  Double Exception crashes during flash writes (NVS/OTA).
+- **Startup stability** — increased main task stack to 16KB and system event stack
+  to 4096B to prevent overflows during mDNS and MQTT initialization.
+- **mDNS unique instances** — assigned unique instance names ("HTTP", "Stream")
+  to prevent "Service already exists" errors on port 81.
+- **Race condition fix** — delayed telemetry task until MQTT is connected to
+  ensure all mutexes are initialized before use.
 - **Thread-safe camera recovery** — added a mutex to `camera_reinit()` to prevent
   concurrent driver de-initialization crashes.
 - **Frame pool capacity** — increased from 4 to 8 buffers (4MB total PSRAM) to

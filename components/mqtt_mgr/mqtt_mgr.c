@@ -209,67 +209,6 @@ static void handle_command(const char *topic_ptr, int topic_len, const char *dat
 }
 
 // ========================================
-// Event Handler
-// ========================================
-
-static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
-{
-    esp_mqtt_event_handle_t event = event_data;
-    switch ((esp_mqtt_event_id_t)event_id) {
-    case MQTT_EVENT_CONNECTED:
-        ESP_LOGI(TAG, "MQTT Connected");
-        s_connected = true;
-        
-        // Publish Online Status
-        char status_topic[128];
-        snprintf(status_topic, sizeof(status_topic), "%s/status", base_topic);
-        esp_mqtt_client_publish(client, status_topic, "ON", 0, 1, 1);
-
-        send_ha_discovery();
-
-        // Subscribe to all command topics
-        char cmd_sub[128];
-        snprintf(cmd_sub, sizeof(cmd_sub), "%s/+/set", base_topic); // Wildcard for settings
-        esp_mqtt_client_subscribe(client, cmd_sub, 0);
-        
-        snprintf(cmd_sub, sizeof(cmd_sub), "%s/restart", base_topic);
-        esp_mqtt_client_subscribe(client, cmd_sub, 0);
-
-        snprintf(cmd_sub, sizeof(cmd_sub), "%s/ota/set", base_topic);
-        esp_mqtt_client_subscribe(client, cmd_sub, 0);
-
-        // Publish Initial State
-        char topic[128];
-        snprintf(topic, sizeof(topic), "%s/brightness", base_topic);
-        esp_mqtt_client_publish(client, topic, "0", 0, 1, 1);
-        snprintf(topic, sizeof(topic), "%s/contrast", base_topic);
-        esp_mqtt_client_publish(client, topic, "0", 0, 1, 1);
-        snprintf(topic, sizeof(topic), "%s/saturation", base_topic);
-        esp_mqtt_client_publish(client, topic, "0", 0, 1, 1);
-        snprintf(topic, sizeof(topic), "%s/wb_mode", base_topic);
-        esp_mqtt_client_publish(client, topic, "0", 0, 1, 1);
-        // Fix Unknown sensors: publish placeholder values until telemetry loop fires
-        snprintf(topic, sizeof(topic), "%s/ota_status", base_topic);
-        esp_mqtt_client_publish(client, topic, "idle", 0, 1, 1);
-        snprintf(topic, sizeof(topic), "%s/recovery_count", base_topic);
-        esp_mqtt_client_publish(client, topic, "0", 0, 1, 1);
-        break;
-
-    case MQTT_EVENT_DISCONNECTED:
-        ESP_LOGI(TAG, "MQTT Disconnected");
-        s_connected = false;
-        break;
-
-    case MQTT_EVENT_DATA:
-        handle_command(event->topic, event->topic_len, event->data, event->data_len);
-        break;
-
-    default:
-        break;
-    }
-}
-
-// ========================================
 // Telemetry Task
 // ========================================
 
@@ -352,6 +291,72 @@ static void mqtt_telemetry_task(void *arg)
 }
 
 // ========================================
+// Event Handler
+// ========================================
+
+static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
+{
+    esp_mqtt_event_handle_t event = event_data;
+    switch ((esp_mqtt_event_id_t)event_id) {
+    case MQTT_EVENT_CONNECTED:
+        ESP_LOGI(TAG, "MQTT Connected");
+        s_connected = true;
+        
+        // Start telemetry task on first connection
+        if (s_telemetry_task == NULL) {
+            xTaskCreatePinnedToCore(mqtt_telemetry_task, "mqtt_telemetry", 4096, NULL, 5, &s_telemetry_task, 1);
+        }
+
+        // Publish Online Status
+        char status_topic[128];
+        snprintf(status_topic, sizeof(status_topic), "%s/status", base_topic);
+        esp_mqtt_client_publish(client, status_topic, "ON", 0, 1, 1);
+
+        send_ha_discovery();
+
+        // Subscribe to all command topics
+        char cmd_sub[128];
+        snprintf(cmd_sub, sizeof(cmd_sub), "%s/+/set", base_topic); // Wildcard for settings
+        esp_mqtt_client_subscribe(client, cmd_sub, 0);
+        
+        snprintf(cmd_sub, sizeof(cmd_sub), "%s/restart", base_topic);
+        esp_mqtt_client_subscribe(client, cmd_sub, 0);
+
+        snprintf(cmd_sub, sizeof(cmd_sub), "%s/ota/set", base_topic);
+        esp_mqtt_client_subscribe(client, cmd_sub, 0);
+
+        // Publish Initial State
+        char topic[128];
+        snprintf(topic, sizeof(topic), "%s/brightness", base_topic);
+        esp_mqtt_client_publish(client, topic, "0", 0, 1, 1);
+        snprintf(topic, sizeof(topic), "%s/contrast", base_topic);
+        esp_mqtt_client_publish(client, topic, "0", 0, 1, 1);
+        snprintf(topic, sizeof(topic), "%s/saturation", base_topic);
+        esp_mqtt_client_publish(client, topic, "0", 0, 1, 1);
+        snprintf(topic, sizeof(topic), "%s/wb_mode", base_topic);
+        esp_mqtt_client_publish(client, topic, "0", 0, 1, 1);
+        // Fix Unknown sensors: publish placeholder values until telemetry loop fires
+        snprintf(topic, sizeof(topic), "%s/ota_status", base_topic);
+        esp_mqtt_client_publish(client, topic, "idle", 0, 1, 1);
+        snprintf(topic, sizeof(topic), "%s/recovery_count", base_topic);
+        esp_mqtt_client_publish(client, topic, "0", 0, 1, 1);
+        break;
+
+    case MQTT_EVENT_DISCONNECTED:
+        ESP_LOGI(TAG, "MQTT Disconnected");
+        s_connected = false;
+        break;
+
+    case MQTT_EVENT_DATA:
+        handle_command(event->topic, event->topic_len, event->data, event->data_len);
+        break;
+
+    default:
+        break;
+    }
+}
+
+// ========================================
 // Public API
 // ========================================
 
@@ -381,8 +386,6 @@ esp_err_t mqtt_mgr_start(const char *broker_url, const char *username, const cha
 
     esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
     esp_mqtt_client_start(client);
-
-    xTaskCreatePinnedToCore(mqtt_telemetry_task, "mqtt_telemetry", 3072, NULL, 5, &s_telemetry_task, 1);
 
     return ESP_OK;
 }

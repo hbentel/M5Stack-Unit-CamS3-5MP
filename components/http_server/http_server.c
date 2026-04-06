@@ -465,7 +465,7 @@ static esp_err_t stream_handler(httpd_req_t *req)
     char task_name[16];
     snprintf(task_name, sizeof(task_name), "mjpeg_cl_%d", slot);
     BaseType_t res = xTaskCreatePinnedToCore(
-        mjpeg_client_worker_task, task_name, 4096,
+        mjpeg_client_worker_task, task_name, 8192,
         &s_stream_clients[slot], 5, &s_stream_clients[slot].task, 1);
 
     if (res != pdPASS) {
@@ -803,7 +803,9 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
 
 uint8_t http_server_get_active_streams(void)
 {
-    if (!s_clients_mutex) return 0;
+    if (s_clients_mutex == NULL) {
+        return 0;
+    }
     uint8_t count = 0;
     xSemaphoreTake(s_clients_mutex, portMAX_DELAY);
     for (int i = 0; i < MAX_STREAM_CLIENTS; i++) {
@@ -817,12 +819,9 @@ uint8_t http_server_get_active_streams(void)
 
 esp_err_t start_stream_server(void)
 {
-    if (!s_clients_mutex) s_clients_mutex = xSemaphoreCreateMutex();
-    if (!s_broadcast_mutex) s_broadcast_mutex = xSemaphoreCreateMutex();
-
     // Start broadcaster task if not already running
     if (!s_broadcaster_task_handle) {
-        xTaskCreatePinnedToCore(mjpeg_broadcaster_task, "mjpeg_broad", 4096, NULL, 5, &s_broadcaster_task_handle, 1);
+        xTaskCreatePinnedToCore(mjpeg_broadcaster_task, "mjpeg_broad", 8192, NULL, 5, &s_broadcaster_task_handle, 1);
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -861,6 +860,9 @@ httpd_handle_t stream_server_get_handle(void)
 esp_err_t start_http_server(void)
 {
     s_boot_time_us = esp_timer_get_time();
+
+    if (!s_clients_mutex) s_clients_mutex = xSemaphoreCreateMutex();
+    if (!s_broadcast_mutex) s_broadcast_mutex = xSemaphoreCreateMutex();
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.core_id = 1;

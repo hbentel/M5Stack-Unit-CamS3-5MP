@@ -71,6 +71,22 @@ These options are explicitly disabled in `sdkconfig.defaults`.
 
 ---
 
+## Memory Segregation (Stack Safety)
+
+This firmware uses a strict memory allocation strategy to ensure stability on the ESP32-S3:
+
+- **Task Stacks (Internal SRAM ONLY)**: 
+  All FreeRTOS task stacks must be allocated in internal SRAM (`CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=n`).
+  *Reason*: Flash writes (OTA, NVS commit) suspend the OPI PSRAM cache. If a task stack is in PSRAM during a flash write, the CPU triggers an immediate `Double Exception` crash when it tries to access the stack.
+
+- **Main Task Stack (16 KB)**: 
+  The main initialization task stack is increased to 16 KB to accommodate heavy simultaneous startup of mDNS, MQTT, and the Camera driver.
+
+- **Frame Buffers (PSRAM ONLY)**: 
+  Large image data is kept in PSRAM to prevent internal memory exhaustion. The `frame_pool` is sized at 4MB (8 × 512 KB buffers).
+
+---
+
 ## ISR Requirements
 
 The VSYNC ISR has two hard requirements that must not be relaxed.

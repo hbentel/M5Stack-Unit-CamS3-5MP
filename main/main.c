@@ -122,18 +122,18 @@ static void apply_camera_settings(void)
     ESP_LOGI(TAG, "Camera settings applied");
 }
 
-static SemaphoreHandle_t s_camera_reinit_mutex = NULL;
+SemaphoreHandle_t g_camera_reinit_mutex = NULL;
 
 esp_err_t camera_reinit(void)
 {
-    if (!s_camera_reinit_mutex) {
-        s_camera_reinit_mutex = xSemaphoreCreateMutex();
+    if (!g_camera_reinit_mutex) {
+        return ESP_ERR_INVALID_STATE;
     }
     
-    if (xSemaphoreTake(s_camera_reinit_mutex, 0) != pdTRUE) {
+    if (xSemaphoreTake(g_camera_reinit_mutex, 0) != pdTRUE) {
         ESP_LOGW(TAG, "Camera reinit already in progress, waiting...");
-        xSemaphoreTake(s_camera_reinit_mutex, portMAX_DELAY);
-        xSemaphoreGive(s_camera_reinit_mutex);
+        xSemaphoreTake(g_camera_reinit_mutex, portMAX_DELAY);
+        xSemaphoreGive(g_camera_reinit_mutex);
         return ESP_OK; // Another task just fixed it
     }
 
@@ -150,7 +150,7 @@ esp_err_t camera_reinit(void)
     esp_err_t err = esp_camera_init(&camera_config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Camera reinit failed: 0x%x", err);
-        xSemaphoreGive(s_camera_reinit_mutex);
+        xSemaphoreGive(g_camera_reinit_mutex);
         return err;
     }
 
@@ -166,12 +166,13 @@ esp_err_t camera_reinit(void)
     }
 
     ESP_LOGI(TAG, "Camera reinit successful");
-    xSemaphoreGive(s_camera_reinit_mutex);
+    xSemaphoreGive(g_camera_reinit_mutex);
     return ESP_OK;
 }
 
 void app_main(void)
 {
+    g_camera_reinit_mutex = xSemaphoreCreateMutex();
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "  UnitCamS3-5MP Custom Firmware v2");
     ESP_LOGI(TAG, "  Boot Sequence Started");
@@ -221,8 +222,8 @@ void app_main(void)
     mdns_init();
     mdns_hostname_set(config_mgr_get_device_id());
     mdns_instance_name_set("M5Stack UnitCamS3-5MP");
-    mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
-    mdns_service_add(NULL, "_http", "_tcp", 81, NULL, 0);
+    mdns_service_add("HTTP", "_http", "_tcp", 80, NULL, 0);
+    mdns_service_add("Stream", "_http", "_tcp", 81, NULL, 0);
     ESP_LOGI(TAG, "mDNS hostname: %s.local", config_mgr_get_device_id());
 
     ESP_LOGI(TAG, "--- Starting MQTT Manager ---");

@@ -26,8 +26,8 @@ def mjpeg_client_task(ip, client_id, stop_event):
                 # Count frames by looking for JPEG Start of Image marker
                 frame_count += chunk.count(b'\xff\xd8')
                 
-                # Report FPS every 100 frames
-                if frame_count > 0 and frame_count % 100 == 0:
+                # Report FPS every 50 frames
+                if frame_count > 0 and frame_count % 50 == 0:
                     elapsed = time.time() - start_time
                     if elapsed > 0:
                         fps = frame_count / elapsed
