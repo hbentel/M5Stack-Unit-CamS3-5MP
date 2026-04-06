@@ -6,4 +6,4 @@ endif()
 
 idf_component_register(SRCS "mqtt_mgr.c"
                        INCLUDE_DIRS "include"
-                       REQUIRES mqtt esp_wifi ${JSON_COMPONENT} esp_timer esp_https_ota esp32-camera jpeg_validate recovery_mgr heap)
+                       REQUIRES mqtt esp_wifi ${JSON_COMPONENT} esp_timer esp_https_ota esp32-camera jpeg_validate recovery_mgr heap http_server)

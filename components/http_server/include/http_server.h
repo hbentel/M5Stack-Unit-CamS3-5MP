@@ -28,6 +28,9 @@ void http_server_signal_stop(void);
 // Prepares the HTTP environment for OTA (drains queues, de-inits camera)
 void http_server_prepare_ota(void);
 
+// Returns the number of active MJPEG stream clients
+uint8_t http_server_get_active_streams(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -212,6 +212,7 @@ static esp_err_t stats_handler(httpd_req_t *req)
             "\"no_eoi\":%lu,"
             "\"queue_overflow\":%lu,"
             "\"drops_no_buf\":%lu,"
+            "\"active_streams\":%u,"
             "\"soi_hist\":[%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu]"
         "},"
         "\"wifi\":{"
@@ -226,6 +227,7 @@ static esp_err_t stats_handler(httpd_req_t *req)
         "}",
         fps, cam.vsync_isr_count, cam.eof_count, cam.no_soi_count, cam.no_eoi_count,
         cam.queue_overflow_count, cam.drops_no_free_buf,
+        http_server_get_active_streams(),
         cam.soi_offset_histogram[0], cam.soi_offset_histogram[1], cam.soi_offset_histogram[2],
         cam.soi_offset_histogram[3], cam.soi_offset_histogram[4], cam.soi_offset_histogram[5],
         cam.soi_offset_histogram[6], cam.soi_offset_histogram[7],
@@ -793,6 +795,20 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
 
     return ESP_OK;
 #undef SETUP_BODY_MAX
+}
+
+uint8_t http_server_get_active_streams(void)
+{
+    if (!s_clients_mutex) return 0;
+    uint8_t count = 0;
+    xSemaphoreTake(s_clients_mutex, portMAX_DELAY);
+    for (int i = 0; i < MAX_STREAM_CLIENTS; i++) {
+        if (s_stream_clients[i].active) {
+            count++;
+        }
+    }
+    xSemaphoreGive(s_clients_mutex);
+    return count;
 }
 
 esp_err_t start_stream_server(void)

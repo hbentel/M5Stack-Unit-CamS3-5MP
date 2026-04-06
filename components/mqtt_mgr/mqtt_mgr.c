@@ -10,6 +10,8 @@
 #include "esp_camera.h"
 #include "jpeg_validate.h"
 #include "recovery_mgr.h"
+#include "http_server.h"
+
 // OTA callback — registered by ota_mgr_init() to break circular link dependency
 static esp_err_t (*s_ota_cb)(const char *url) = NULL;
 
@@ -137,6 +139,10 @@ static void send_ha_discovery(void)
     // NO-SOI Errors
     snprintf(state_topic, sizeof(state_topic), "%s/no_soi", base_topic);
     publish_discovery("sensor", "no_soi", "Frame Errors (NO-SOI)", NULL, NULL, NULL, state_topic, 0, 0);
+
+    // Active Streams
+    snprintf(state_topic, sizeof(state_topic), "%s/streams", base_topic);
+    publish_discovery("sensor", "streams", "Active Streams", NULL, "streams", NULL, state_topic, 0, 0);
 
     // OTA Status
     snprintf(state_topic, sizeof(state_topic), "%s/ota_status", base_topic);
@@ -334,6 +340,11 @@ static void mqtt_telemetry_task(void *arg)
             // Recovery Events
             snprintf(topic, sizeof(topic), "%s/recovery_count", base_topic);
             snprintf(payload, sizeof(payload), "%d", recovery_mgr_get_error_count());
+            esp_mqtt_client_publish(client, topic, payload, 0, 0, 0);
+
+            // Active Streams
+            snprintf(topic, sizeof(topic), "%s/streams", base_topic);
+            snprintf(payload, sizeof(payload), "%u", http_server_get_active_streams());
             esp_mqtt_client_publish(client, topic, payload, 0, 0, 0);
         }
         vTaskDelay(pdMS_TO_TICKS(10000)); // Every 10 seconds
