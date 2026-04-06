@@ -19,6 +19,8 @@
 #include "recovery_mgr.h"
 #include "esp_netif.h"
 #include "nvs_flash.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 
 static const char *TAG = "http_server";
 
@@ -28,7 +30,24 @@ static volatile bool s_ota_pending = false;
 
 #define MJPEG_BOUNDARY "frame"
 #define STREAM_PART_HDR "--" MJPEG_BOUNDARY "\r\nContent-Type: image/jpeg\r\nContent-Length: %zu\r\n\r\n"
-#define STREAM_FRAME_INTERVAL_MS 250  // ~4 FPS target to prevent Wi-Fi saturation
+#define STREAM_FRAME_INTERVAL_MS 100 // ~10 FPS target (updated from 250)
+
+// Multi-client MJPEG structures
+typedef struct {
+    httpd_req_t *req;
+    TaskHandle_t task;
+    SemaphoreHandle_t sync_sem;
+    bool active;
+} mjpeg_client_t;
+
+#define MAX_STREAM_CLIENTS 5
+static mjpeg_client_t s_stream_clients[MAX_STREAM_CLIENTS];
+static SemaphoreHandle_t s_clients_mutex = NULL;
+
+static frame_buffer_t *s_broadcast_fb = NULL; // Current latest frame
+static SemaphoreHandle_t s_broadcast_mutex = NULL;
+static uint32_t s_broadcast_frame_id = 0;
+static TaskHandle_t s_broadcaster_task_handle = NULL;
 
 // Forward declaration - defined in main.c
 extern esp_err_t camera_reinit(void);
@@ -220,122 +239,225 @@ static esp_err_t stats_handler(httpd_req_t *req)
 }
 
 // ========================================
-// MJPEG Stream Handler — /stream
-// multipart/x-mixed-replace for Frigate/browsers
+// Multi-client MJPEG Tasks
 // ========================================
-static esp_err_t stream_handler(httpd_req_t *req)
-{
-    ESP_LOGI(TAG, "MJPEG stream client connected");
 
-    // Set multipart content type
+static void mjpeg_broadcaster_task(void *arg)
+{
+    ESP_LOGI(TAG, "MJPEG broadcaster task started on Core 1");
+    uint32_t fail_count = 0;
+
+    while (1) {
+        if (s_ota_pending) goto broadcaster_exit;
+
+        camera_fb_t *fb = esp_camera_fb_get();
+        if (s_ota_pending) {
+            if (fb) esp_camera_fb_return(fb);
+            goto broadcaster_exit;
+        }
+
+        if (!fb) {
+            fail_count++;
+            if (fail_count >= 10) {
+                ESP_LOGE(TAG, "Broadcaster: hard camera stall, reinit...");
+                camera_reinit();
+                fail_count = 0;
+            }
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+        fail_count = 0;
+
+        // Basic JPEG validation
+        if (fb->len < 100 || fb->buf[0] != 0xFF || fb->buf[1] != 0xD8) {
+            esp_camera_fb_return(fb);
+            continue;
+        }
+
+        // Copy to a new pool buffer for broadcast
+        frame_buffer_t *new_fb = frame_pool_get();
+        if (new_fb) {
+            memcpy(new_fb->buf, fb->buf, fb->len);
+            new_fb->len = fb->len;
+
+            // Swap global pointer
+            xSemaphoreTake(s_broadcast_mutex, portMAX_DELAY);
+            frame_buffer_t *old_fb = s_broadcast_fb;
+            s_broadcast_fb = new_fb;
+            s_broadcast_frame_id++;
+            xSemaphoreGive(s_broadcast_mutex);
+
+            // Release old frame
+            if (old_fb) frame_pool_return(old_fb);
+
+            // Signal all clients
+            if (s_clients_mutex) {
+                xSemaphoreTake(s_clients_mutex, portMAX_DELAY);
+                for (int i = 0; i < MAX_STREAM_CLIENTS; i++) {
+                    if (s_stream_clients[i].active && s_stream_clients[i].sync_sem) {
+                        xSemaphoreGive(s_stream_clients[i].sync_sem);
+                    }
+                }
+                xSemaphoreGive(s_clients_mutex);
+            }
+        }
+
+        esp_camera_fb_return(fb);
+        vTaskDelay(pdMS_TO_TICKS(STREAM_FRAME_INTERVAL_MS));
+    }
+
+broadcaster_exit:
+    ESP_LOGW(TAG, "Broadcaster: shutting down");
+    xSemaphoreTake(s_broadcast_mutex, portMAX_DELAY);
+    if (s_broadcast_fb) {
+        frame_pool_return(s_broadcast_fb);
+        s_broadcast_fb = NULL;
+    }
+    xSemaphoreGive(s_broadcast_mutex);
+    s_broadcaster_task_handle = NULL;
+    vTaskDelete(NULL);
+}
+
+static void mjpeg_client_worker_task(void *arg)
+{
+    mjpeg_client_t *client = (mjpeg_client_t *)arg;
+    httpd_req_t *req = client->req;
+    int sockfd = httpd_req_to_sockfd(req);
+
+    ESP_LOGI(TAG, "MJPEG worker started for socket %d", sockfd);
+
+    // Set headers (part of the async response)
     httpd_resp_set_type(req, "multipart/x-mixed-replace; boundary=" MJPEG_BOUNDARY);
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
 
     char part_hdr[128];
     uint32_t frame_count = 0;
-    uint32_t fail_count = 0;
-    int64_t start_time = esp_timer_get_time();
+    uint32_t last_sent_id = 0;
     esp_err_t res = ESP_OK;
 
-    while (res == ESP_OK) {
-        // OTA needs exclusive flash access — exit stream loop
-        if (s_ota_pending) {
-            ESP_LOGW(TAG, "OTA pending, stopping stream");
-            break;
+    // Use a local buffer to hold the frame during network send
+    // to avoid holding s_broadcast_mutex for too long.
+    frame_buffer_t *local_fb = frame_pool_get();
+    if (!local_fb) {
+        ESP_LOGE(TAG, "Worker: failed to get pool buffer, aborting");
+        goto cleanup;
+    }
+
+    while (res == ESP_OK && !s_ota_pending) {
+        // Wait for broadcaster signal (up to 1s)
+        if (xSemaphoreTake(client->sync_sem, pdMS_TO_TICKS(1000)) != pdTRUE) {
+            continue; // No new frame within timeout
         }
-        camera_fb_t *fb = esp_camera_fb_get();
-        if (!fb) {
-            fail_count++;
-            if (fail_count >= 3) {
-                ESP_LOGW(TAG, "Stream: reinitializing camera after %lu failures",
-                         (unsigned long)fail_count);
-                camera_reinit();
-                fail_count = 0;
-                vTaskDelay(pdMS_TO_TICKS(500));
+
+        // Copy latest frame to local buffer
+        xSemaphoreTake(s_broadcast_mutex, portMAX_DELAY);
+        if (s_broadcast_fb && s_broadcast_frame_id != last_sent_id) {
+            if (s_broadcast_fb->len <= local_fb->capacity) {
+                memcpy(local_fb->buf, s_broadcast_fb->buf, s_broadcast_fb->len);
+                local_fb->len = s_broadcast_fb->len;
+                last_sent_id = s_broadcast_frame_id;
             } else {
-                vTaskDelay(pdMS_TO_TICKS(200));
+                ESP_LOGW(TAG, "Worker: broadcast frame too large for local buffer");
             }
-            continue;
         }
+        xSemaphoreGive(s_broadcast_mutex);
 
-        // Basic JPEG validation
-        if (fb->len < 100 ||
-            fb->buf[0] != 0xFF || fb->buf[1] != 0xD8 ||
-            fb->buf[fb->len - 2] != 0xFF || fb->buf[fb->len - 1] != 0xD9) {
-            esp_camera_fb_return(fb);
-            fail_count++;
-            if (fail_count >= 20) {
-                ESP_LOGW(TAG, "Stream: reinitializing camera after %lu bad frames",
-                         (unsigned long)fail_count);
-                camera_reinit();
-                fail_count = 0;
-                vTaskDelay(pdMS_TO_TICKS(500));
-            }
-            continue;
-        }
-
-        fail_count = 0;
-
-        // Copy to pool buffer so camera can continue capturing
-        frame_buffer_t *pool_fb = frame_pool_get();
-        const uint8_t *send_buf;
-        size_t send_len;
-
-        if (pool_fb && fb->len <= pool_fb->capacity) {
-            memcpy(pool_fb->buf, fb->buf, fb->len);
-            pool_fb->len = fb->len;
-            esp_camera_fb_return(fb);
-            send_buf = pool_fb->buf;
-            send_len = pool_fb->len;
-        } else {
-            // No pool buffer available — send directly from camera buffer
-            if (pool_fb) frame_pool_return(pool_fb);
-            pool_fb = NULL;
-            send_buf = fb->buf;
-            send_len = fb->len;
-        }
+        if (local_fb->len == 0) continue;
 
         // Send multipart boundary + headers
-        int hdr_len = snprintf(part_hdr, sizeof(part_hdr), STREAM_PART_HDR, send_len);
+        int hdr_len = snprintf(part_hdr, sizeof(part_hdr), STREAM_PART_HDR, local_fb->len);
         res = httpd_resp_send_chunk(req, part_hdr, hdr_len);
 
-        // Send JPEG data
         if (res == ESP_OK) {
-            res = httpd_resp_send_chunk(req, (const char *)send_buf, send_len);
+            res = httpd_resp_send_chunk(req, (const char *)local_fb->buf, local_fb->len);
         }
-
-        // Send trailing CRLF
         if (res == ESP_OK) {
             res = httpd_resp_send_chunk(req, "\r\n", 2);
         }
 
-        // Release buffers
-        if (pool_fb) {
-            frame_pool_return(pool_fb);
-        } else {
-            esp_camera_fb_return(fb);
-        }
-
         frame_count++;
-        if (frame_count % 100 == 0) {
-            int64_t elapsed_s = (esp_timer_get_time() - start_time) / 1000000;
-            if (elapsed_s > 0) {
-                ESP_LOGI(TAG, "MJPEG stream: %lu frames, %.1f fps, heap: %lu",
-                         (unsigned long)frame_count,
-                         (float)frame_count / elapsed_s,
-                         (unsigned long)esp_get_free_heap_size());
-            }
-        }
-
-        // Frame pacing
-        vTaskDelay(pdMS_TO_TICKS(STREAM_FRAME_INTERVAL_MS));
     }
 
-    ESP_LOGI(TAG, "MJPEG stream client disconnected after %lu frames",
-             (unsigned long)frame_count);
-    return res;
+cleanup:
+    ESP_LOGI(TAG, "MJPEG worker for socket %d stopping (frames: %lu)", sockfd, frame_count);
+    if (local_fb) frame_pool_return(local_fb);
+
+    // Free the request (important for async)
+    httpd_req_async_handler_complete(req);
+
+    // Unregister client
+    xSemaphoreTake(s_clients_mutex, portMAX_DELAY);
+    client->active = false;
+    client->req = NULL;
+    client->task = NULL;
+    // We keep the sync_sem for reuse
+    xSemaphoreGive(s_clients_mutex);
+
+    vTaskDelete(NULL);
 }
+
+// ========================================
+// MJPEG Stream Handler — /stream
+// ========================================
+static esp_err_t stream_handler(httpd_req_t *req)
+{
+    if (!s_clients_mutex) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    xSemaphoreTake(s_clients_mutex, portMAX_DELAY);
+    int slot = -1;
+    for (int i = 0; i < MAX_STREAM_CLIENTS; i++) {
+        if (!s_stream_clients[i].active) {
+            slot = i;
+            break;
+        }
+    }
+
+    if (slot == -1) {
+        xSemaphoreGive(s_clients_mutex);
+        ESP_LOGW(TAG, "Stream server full (max %d clients)", MAX_STREAM_CLIENTS);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Too many clients");
+        return ESP_FAIL;
+    }
+
+    // Allocate sem if not already there
+    if (!s_stream_clients[slot].sync_sem) {
+        s_stream_clients[slot].sync_sem = xSemaphoreCreateBinary();
+    }
+
+    // Begin async response
+    httpd_req_t *copy = NULL;
+    esp_err_t err = httpd_req_async_handler_begin(req, &copy);
+    if (err != ESP_OK) {
+        xSemaphoreGive(s_clients_mutex);
+        ESP_LOGE(TAG, "Async handler begin failed");
+        return err;
+    }
+
+    s_stream_clients[slot].req = copy;
+    s_stream_clients[slot].active = true;
+
+    char task_name[16];
+    snprintf(task_name, sizeof(task_name), "mjpeg_cl_%d", slot);
+    BaseType_t res = xTaskCreatePinnedToCore(
+        mjpeg_client_worker_task, task_name, 4096,
+        &s_stream_clients[slot], 5, &s_stream_clients[slot].task, 1);
+
+    if (res != pdPASS) {
+        s_stream_clients[slot].active = false;
+        httpd_req_async_handler_complete(copy);
+        xSemaphoreGive(s_clients_mutex);
+        ESP_LOGE(TAG, "Failed to create client task");
+        return ESP_FAIL;
+    }
+
+    xSemaphoreGive(s_clients_mutex);
+    return ESP_OK;
+}
+
 
 // Handler for "/api/logs" — return ring-buffered log output as plain text
 static esp_err_t logs_handler(httpd_req_t *req)
@@ -656,6 +778,14 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
 
 esp_err_t start_stream_server(void)
 {
+    if (!s_clients_mutex) s_clients_mutex = xSemaphoreCreateMutex();
+    if (!s_broadcast_mutex) s_broadcast_mutex = xSemaphoreCreateMutex();
+
+    // Start broadcaster task if not already running
+    if (!s_broadcaster_task_handle) {
+        xTaskCreatePinnedToCore(mjpeg_broadcaster_task, "mjpeg_broad", 4096, NULL, 5, &s_broadcaster_task_handle, 1);
+    }
+
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 81;             // DIFFERENT PORT
     config.ctrl_port = 32767;            // DIFFERENT CONTROL PORT
@@ -783,6 +913,9 @@ httpd_handle_t http_server_get_handle(void)
 
 void http_server_stop(void)
 {
+    s_ota_pending = true;
+    vTaskDelay(pdMS_TO_TICKS(500)); // Give tasks time to notice
+
     if (s_server) {
         ESP_LOGW(TAG, "Stopping main HTTP server (Port 80)...");
         httpd_stop(s_server);
@@ -793,6 +926,8 @@ void http_server_stop(void)
         httpd_stop(s_stream_server);
         s_stream_server = NULL;
     }
+
+    // Mutexes and broadcaster handle stay for next start, or can be cleaned if permanent stop
 }
 
 void http_server_signal_stop(void)
@@ -806,15 +941,34 @@ void http_server_prepare_ota(void)
     ESP_LOGW(TAG, "OTA requested: signaling streams to stop...");
     s_ota_pending = true;
 
-    // Wait for stream handler to notice the flag and exit.
-    // Stream handler checks every STREAM_FRAME_INTERVAL_MS (100ms)
-    // plus camera_fb_get can block up to ~200ms.
-    vTaskDelay(pdMS_TO_TICKS(2000));
+    // Wait for broadcaster task to exit
+    int timeout = 50; // 5 seconds (50 * 100ms)
+    while (s_broadcaster_task_handle != NULL && timeout-- > 0) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    if (s_broadcaster_task_handle != NULL) {
+        ESP_LOGE(TAG, "Broadcaster task failed to exit, deleting manually");
+        vTaskDelete(s_broadcaster_task_handle);
+        s_broadcaster_task_handle = NULL;
+    }
+
+    // Wait for client tasks to exit
+    timeout = 20; // 2 seconds
+    bool all_gone;
+    do {
+        all_gone = true;
+        xSemaphoreTake(s_clients_mutex, portMAX_DELAY);
+        for (int i = 0; i < MAX_STREAM_CLIENTS; i++) {
+            if (s_stream_clients[i].active) {
+                all_gone = false;
+                break;
+            }
+        }
+        xSemaphoreGive(s_clients_mutex);
+        if (!all_gone) vTaskDelay(pdMS_TO_TICKS(100));
+    } while (!all_gone && timeout-- > 0);
 
     // Drain all pending camera frames before deinit.
-    // cam_task on Core 1 may be mid-frame (adjusting SOI offsets on buffer
-    // pointers). By draining, we ensure cam_task finishes processing and
-    // blocks on its empty queue — safe to delete from another core.
     ESP_LOGW(TAG, "Draining camera frame buffers...");
     for (int i = 0; i < 10; i++) {
         camera_fb_t *fb = esp_camera_fb_get();

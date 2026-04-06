@@ -172,9 +172,9 @@ void app_main(void)
     log_buf_init(); // Start capturing logs to PSRAM ring buffer (non-fatal if PSRAM unavailable)
 
     ESP_LOGI(TAG, "--- Initializing Frame Pool ---");
-    // 4 buffers x 512KB = 2.0MB fixed PSRAM usage
+    // 8 buffers x 512KB = 4.0MB fixed PSRAM usage
     // Sized to support up to UXGA (1600x1200) high-quality JPEGs
-    err = frame_pool_init(4, 512 * 1024);
+    err = frame_pool_init(8, 512 * 1024);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Frame Pool Init Failed!");
         while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
