@@ -5,6 +5,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.1] — 2026-04-05
+
+### Added
+
+- **Multi-client MJPEG streaming** — support for up to 5 simultaneous stream clients
+  (e.g., Frigate `detect` + `record` + browser view) using asynchronous HTTP
+  handlers and a dedicated broadcaster task.
+- **`active_streams` metric** — added to `/stats` JSON and MQTT telemetry;
+  includes Home Assistant auto-discovery as a new sensor.
+- **Broadcaster idling** — `mjpeg_broadcaster_task` now idles when 0 clients are
+  connected, preserving PSRAM bandwidth and reducing heat.
+- **Python test script** — `test_mjpeg_concurrency.py` added for verifying
+  multi-client performance.
+
+### Fixed
+
+- **Thread-safe camera recovery** — added a mutex to `camera_reinit()` to prevent
+  concurrent driver de-initialization crashes.
+- **Frame pool capacity** — increased from 4 to 8 buffers (4MB total PSRAM) to
+  smoothly handle multiple simultaneous consumers.
+
 ## [v0.2.0] — 2026-04-04
 
 ### Added

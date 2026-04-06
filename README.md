@@ -37,9 +37,10 @@ The device IP is printed to the serial monitor on boot and is shown on the `/set
 
 ## Features
 
-- **MJPEG streaming** over HTTP (port 81 `/stream`) — compatible with Frigate NVR
+- **Multi-client MJPEG streaming** over HTTP (port 81 `/stream`) — supports up to 5
+  simultaneous clients (e.g. Frigate `detect` + `record` + multiple browsers)
 - **Single JPEG snapshot** over HTTP (port 80 `/`)
-- **MQTT telemetry** — RSSI, uptime, heap, PSRAM, FPS, error counters every 10 s
+- **MQTT telemetry** — RSSI, uptime, heap, PSRAM, FPS, active stream count, error counters every 10 s
 - **Home Assistant auto-discovery** — sensor, number, and button entities on connect
 - **Camera image controls** via MQTT — brightness, contrast, saturation, white balance
 - **URL-based OTA** — publish firmware URL to MQTT; device flashes and reboots
@@ -295,6 +296,7 @@ All topics use the **Device ID** as a prefix (default: `unitcams3`).
 | `unitcams3/no_soi` | Cumulative NO-SOI frame errors |
 | `unitcams3/jpeg_drops` | Cumulative dropped frames |
 | `unitcams3/recovery_count` | Cumulative recovery events |
+| `unitcams3/streams` | Active MJPEG stream clients |
 | `unitcams3/ota_status` | `idle` / `pending_reboot` |
 
 ### Command topics (subscribe)

@@ -37,17 +37,22 @@ PY260 sensor → GDMA → PSRAM frame buffers (4×~512KB)
                            ↓
                     cam_psram_jpeg_task (Core 1)
                     - validates SOI/EOI
-                    - copies to frame_pool (4×512KB PSRAM)
-                    - returns driver buffer immediately
                            ↓
-                    frame_pool (decouples camera from network)
+                    mjpeg_broadcaster_task (Core 1)
+                    - idles when 0 clients connected
+                    - copies to frame_pool (8×512KB PSRAM)
+                    - signals active worker tasks
                            ↓
-             HTTP stream handler (Core 1) → Frigate MJPEG client
+                    mjpeg_client_worker_task (Core 1)
+                    - 1 task per connection (max 5)
+                    - sends from frame_pool to socket
+                           ↓
+                    Frigate / Browser MJPEG client
 ```
 
 **Core assignments:**
 - Core 0: Wi-Fi / lwIP stack
-- Core 1: cam_task, cam_psram_jpeg_task, VSYNC ISR, GDMA EOF ISR, HTTP server tasks
+- Core 1: cam_task, cam_psram_jpeg_task, mjpeg_broadcaster_task, mjpeg_worker_task, VSYNC ISR, GDMA EOF ISR, HTTP server tasks
 
 ### ISR Requirements (do not change)
 
@@ -70,7 +75,7 @@ The VSYNC ISR has two hard requirements that must not be removed:
 | Component | Purpose |
 |-----------|---------|
 | `esp32-camera/` | Forked M5Stack driver (PY260/mega_ccm only, JPEG only, ISR on Core 1) |
-| `frame_pool/` | Pre-allocates 4×512KB PSRAM buffers at boot; decouples camera from HTTP |
+| `frame_pool/` | Pre-allocates 8×512KB PSRAM buffers at boot; decouples camera from HTTP |
 | `jpeg_validate/` | Application-level SOI/EOI check + atomic drop counter |
 | `log_buf/` | 16KB PSRAM ring buffer via `esp_log_set_vprintf()` hook; `log_buf_snapshot()` serves `/api/logs` |
 | `http_server/` | Port 80: snapshot `/`, health `/health` (incl. `reset_reason`), stats `/stats`, coredump `/api/coredump`, logs `/api/logs`; Port 81: MJPEG stream `/stream` |
@@ -93,7 +98,7 @@ Base topic: `unitcams3`
 |-------|-----------|---------|
 | `unitcams3/status` | publish | `ON`/`OFF` (LWT) |
 | `unitcams3/rssi`, `/uptime`, `/heap`, `/psram_free` | publish | Telemetry every 10s |
-| `unitcams3/fps`, `/no_soi`, `/jpeg_drops`, `/recovery_count` | publish | Camera health every 10s |
+| `unitcams3/fps`, `/no_soi`, `/jpeg_drops`, `/recovery_count`, `/streams` | publish | Camera health/stats every 10s |
 | `unitcams3/ota_status` | publish | `idle` / `pending_reboot` |
 | `unitcams3/brightness/set`, `/contrast/set`, `/saturation/set`, `/wb_mode/set` | subscribe | Camera image controls |
 | `unitcams3/restart` | subscribe | Triggers `esp_restart()` |

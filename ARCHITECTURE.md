@@ -12,17 +12,23 @@ PY260 sensor → GDMA → PSRAM frame buffers (4 × ~512 KB)
                               ↓
                   cam_psram_jpeg_task  (Core 1)
                   - validates SOI/EOI
-                  - copies to frame_pool (4 × 512 KB PSRAM)
-                  - returns driver buffer immediately
+                  - pushes latest pointer to Broadcaster
                               ↓
-                  frame_pool  (decouples camera from network)
+                  mjpeg_broadcaster_task (Core 1)
+                  - idles when 0 clients connected
+                  - copies to frame_pool (8 × 512 KB PSRAM)
+                  - signals active worker tasks
                               ↓
-             HTTP stream handler  (Core 1) → Frigate MJPEG client
+                  mjpeg_client_worker_task (Core 1)
+                  - 1 task per connection (max 5)
+                  - sends from frame_pool to socket
+                              ↓
+                  Frigate / Browser MJPEG client
 ```
 
 **Core assignments:**
 - Core 0: Wi-Fi / lwIP stack
-- Core 1: `cam_task`, `cam_psram_jpeg_task`, VSYNC ISR, GDMA EOF ISR, HTTP server tasks
+- Core 1: `cam_task`, `cam_psram_jpeg_task`, `mjpeg_broadcaster_task`, `mjpeg_worker_task`, VSYNC ISR, GDMA EOF ISR, HTTP server tasks
 
 ---
 
@@ -175,7 +181,7 @@ the flag — preventing deliberate reboots from tripping the boot-loop threshold
 | Component | Purpose |
 |-----------|---------|
 | `esp32-camera/` | Forked M5Stack driver — PY260/mega_ccm only, JPEG only, ISR on Core 1 |
-| `frame_pool/` | Pre-allocates 4 × 512 KB PSRAM buffers at boot; ring-buffer semantics |
+| `frame_pool/` | Pre-allocates 8 × 512 KB PSRAM buffers at boot; ring-buffer semantics |
 | `jpeg_validate/` | SOI/EOI boundary check + atomic drop counter |
 | `http_server/` | Port 80: snapshot, health (incl. `reset_reason`), stats, coredump, logs; Port 81: MJPEG stream |
 | `log_buf/` | 16 KB PSRAM ring buffer hooked into `esp_log_set_vprintf()`; exposes `log_buf_snapshot()` for `/api/logs` |
