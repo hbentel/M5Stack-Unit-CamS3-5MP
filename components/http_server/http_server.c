@@ -168,13 +168,14 @@ static esp_err_t health_handler(httpd_req_t *req)
     char buf[384];
     int len = snprintf(buf, sizeof(buf),
         "{\"uptime_s\":%lld,"
+        "\"version\":\"%s\","
         "\"heap_free\":%zu,"
         "\"internal_free\":%zu,"
         "\"psram_free\":%zu,"
         "\"jpeg_drops\":%lu,"
         "\"reset_reason\":\"%s\","
         "\"app_sha256\":\"%s\"}",
-        (long long)uptime_s, free_heap, free_internal, free_psram,
+        (long long)uptime_s, app->version, free_heap, free_internal, free_psram,
         (unsigned long)drops, reset_str, sha256_hex);
 
     httpd_resp_set_type(req, "application/json");
@@ -578,6 +579,8 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
     char ip_str[16];
     snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&ip_info.ip));
 
+    const esp_app_desc_t *app = esp_app_get_description();
+
     char buf[3072];
     int pos = 0;
 
@@ -596,10 +599,11 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
         "<h2>Camera Configuration</h2>"
         "<div class='info'>"
         "Device IP: <strong>%s</strong><br>"
-        "Stream: <a href='http://%s:81/stream'>http://%s:81/stream</a>"
+        "Stream: <a href='http://%s:81/stream'>http://%s:81/stream</a><br>"
+        "Version: <strong>%s</strong>"
         "</div>"
         "<form method='POST' action='/setup'>",
-        ip_str, ip_str, ip_str);
+        ip_str, ip_str, ip_str, app->version);
 
     pos += snprintf(buf + pos, sizeof(buf) - pos,
         "<label><input type='checkbox' name='mqtt_en' value='1' id='mqtt_en'%s> Enable MQTT</label>"
