@@ -250,6 +250,25 @@ static void mjpeg_broadcaster_task(void *arg)
     while (1) {
         if (s_ota_pending) goto broadcaster_exit;
 
+        // Check for active clients before capturing
+        bool has_clients = false;
+        if (s_clients_mutex) {
+            xSemaphoreTake(s_clients_mutex, portMAX_DELAY);
+            for (int i = 0; i < MAX_STREAM_CLIENTS; i++) {
+                if (s_stream_clients[i].active) {
+                    has_clients = true;
+                    break;
+                }
+            }
+            xSemaphoreGive(s_clients_mutex);
+        }
+
+        if (!has_clients) {
+            // Idle if no one is watching
+            vTaskDelay(pdMS_TO_TICKS(250));
+            continue;
+        }
+
         camera_fb_t *fb = esp_camera_fb_get();
         if (s_ota_pending) {
             if (fb) esp_camera_fb_return(fb);

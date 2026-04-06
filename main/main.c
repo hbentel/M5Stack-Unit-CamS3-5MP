@@ -122,8 +122,21 @@ static void apply_camera_settings(void)
     ESP_LOGI(TAG, "Camera settings applied");
 }
 
+static SemaphoreHandle_t s_camera_reinit_mutex = NULL;
+
 esp_err_t camera_reinit(void)
 {
+    if (!s_camera_reinit_mutex) {
+        s_camera_reinit_mutex = xSemaphoreCreateMutex();
+    }
+    
+    if (xSemaphoreTake(s_camera_reinit_mutex, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "Camera reinit already in progress, waiting...");
+        xSemaphoreTake(s_camera_reinit_mutex, portMAX_DELAY);
+        xSemaphoreGive(s_camera_reinit_mutex);
+        return ESP_OK; // Another task just fixed it
+    }
+
     ESP_LOGW(TAG, "Reinitializing camera driver...");
     esp_camera_deinit();
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -137,6 +150,7 @@ esp_err_t camera_reinit(void)
     esp_err_t err = esp_camera_init(&camera_config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Camera reinit failed: 0x%x", err);
+        xSemaphoreGive(s_camera_reinit_mutex);
         return err;
     }
 
@@ -152,6 +166,7 @@ esp_err_t camera_reinit(void)
     }
 
     ESP_LOGI(TAG, "Camera reinit successful");
+    xSemaphoreGive(s_camera_reinit_mutex);
     return ESP_OK;
 }
 
