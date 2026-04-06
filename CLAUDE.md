@@ -68,7 +68,7 @@ The VSYNC ISR has two hard requirements that must not be removed:
 - **PSRAM at 40MHz** — not 80MHz. Higher speed causes OPI bus contention with camera DMA.
 - **Task Stacks in Internal RAM** — `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=n` is mandatory. Stacks in PSRAM cause Double Exception crashes during flash writes (NVS/OTA).
 - **Main Task Stack = 16KB** — required for heavy initialization.
-- **Task WDT Panic = disabled** — `CONFIG_ESP_TASK_WDT_PANIC=n` to allow diagnostic recovery during startup.
+- **Task WDT Panic = enabled** — `CONFIG_ESP_TASK_WDT_PANIC=y` for production auto-recovery. Timeout is 30s.
 - **`psram_mode = false`** — `psram_mode=true` was tested and causes frame truncation bugs. Do not re-enable.
 - **`SPIRAM_FETCH_INSTRUCTIONS` and `SPIRAM_RODATA` must stay disabled** — code/rodata in PSRAM competes with camera DMA on the OPI bus.
 - **`FPS_TEST_MODE` in `main.c` line 24** — must be `0` for production. Set to `1` only when measuring driver performance without Frigate connected.

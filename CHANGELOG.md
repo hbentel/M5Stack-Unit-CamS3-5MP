@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.2] — 2026-04-05
+
+### Fixed
+
+- **Production hardening** — re-enabled Task Watchdog Panic (`CONFIG_ESP_TASK_WDT_PANIC=y`) for auto-recovery from hangs.
+- **Main task stack** — increased `main_task` stack size to 16KB to prevent startup overflows during heavy initialization.
+- **Documentation** — formalized Memory Segregation rules in ARCHITECTURE.md.
+
 ## [v0.2.1] — 2026-04-05
 
 ### Added
