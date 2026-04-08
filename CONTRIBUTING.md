@@ -52,6 +52,18 @@ curl -o /tmp/snap.jpg http://192.168.50.44/   # Single JPEG snapshot
 
 Call `/stats` twice 5–10 s apart — the FPS field is a delta counter.
 
+### Multi-client stream stress test
+
+```bash
+pip install requests
+python3 test_stream_stress.py --clients 3 --duration 60
+```
+
+Opens N simultaneous MJPEG streams, reports per-client FPS, bad JPEG count, max
+frame gap, and live device-side stats (`/stats`). A clean run shows 0 bad JPEGs,
+0 Wi-Fi disconnects, and stable PSRAM across the duration. Use `--clients 4` to
+fill all slots alongside Frigate, or `--duration 300` for a longer soak test.
+
 ## Pull Requests
 
 - One logical change per PR

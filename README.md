@@ -37,10 +37,14 @@ The device IP is printed to the serial monitor on boot and is shown on the `/set
 
 ## Features
 
-- **Multi-client MJPEG streaming** over HTTP (port 81 `/stream`) — supports up to 5
-  simultaneous clients (e.g. Frigate `detect` + `record` + multiple browsers)
-- **Single JPEG snapshot** over HTTP (port 80 `/`)
+- **Zero-copy MJPEG streaming** over HTTP (port 81 `/stream`) — up to 5 simultaneous
+  clients; atomic reference counting means all workers share one PSRAM buffer with no
+  per-client copy; pull-based pacing so each client runs at its own natural rate
+- **Optimized snapshots** over HTTP (port 80 `/`) — reuses the live stream frame when
+  the broadcaster is active; zero hardware contention with the stream
 - **MQTT telemetry** — RSSI, uptime, heap, PSRAM, FPS, active stream count, error counters every 10 s
+- **Production reliability** — internal SRAM task stacks, 16KB main stack, and
+  automatic Watchdog recovery (30s timeout)
 - **Home Assistant auto-discovery** — sensor, number, and button entities on connect
 - **Camera image controls** via MQTT — brightness, contrast, saturation, white balance
 - **URL-based OTA** — publish firmware URL to MQTT; device flashes and reboots
@@ -276,6 +280,36 @@ cameras:
 > The `/stats` endpoint reports actual camera FPS — call it twice 5–10 s apart
 > for an accurate reading.
 
+### Image rotation
+
+The physical camera orientation may require a 90° rotation. To rotate pixels
+(not just set metadata) add the camera to `go2rtc` and transcode via ffmpeg:
+
+```yaml
+go2rtc:
+  streams:
+    unitcams3:
+      - "exec:ffmpeg -f mjpeg -i http://<device-ip>:81/stream -vf transpose=1 -c:v libx264 -preset ultrafast -tune zerolatency -f rtsp pipe:1"
+
+cameras:
+  unitcams3:
+    ffmpeg:
+      hwaccel_args: []
+      inputs:
+        - path: rtsp://127.0.0.1:8554/unitcams3
+          input_args: preset-rtsp-restream
+          roles:
+            - detect
+            - record
+    detect:
+      width: 480   # swapped after 90° rotation
+      height: 640
+      fps: 5
+```
+
+`transpose=1` = 90° clockwise. Use `transpose=2` for counter-clockwise.
+Using `go2rtc` also enables Frigate's timeline/VOD playback for this camera.
+
 ---
 
 ## MQTT & Home Assistant
@@ -353,10 +387,13 @@ cd build && python3 -m http.server 8080
 ### Trigger OTA via MQTT
 
 ```bash
-mosquitto_pub -h <broker-ip> \
+mosquitto_pub -h <broker-ip> -q 1 \
   -t unitcams3/ota/set \
   -m "http://<your-ip>:8080/unitcams3_firmware.bin"
 ```
+
+Use `-q 1` (QoS 1) so the broker retries delivery if the device briefly
+disconnects at the moment of publish. QoS 0 messages are silently lost on reconnect.
 
 The device saves the URL to RTC RAM (a plain SRAM write — safe while camera DMA
 is running), publishes `unitcams3/ota_status: pending_reboot`, then reboots.

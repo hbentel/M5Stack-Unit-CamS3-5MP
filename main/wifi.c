@@ -51,8 +51,10 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         }
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         if (!s_provisioning_active) {
+            wifi_event_sta_disconnected_t *evt = (wifi_event_sta_disconnected_t *)event_data;
             s_disconnect_count++;
-            ESP_LOGW(TAG, "Disconnected. Retrying...");
+            ESP_LOGW(TAG, "Disconnected (reason: %d). Retrying in 1s...", evt->reason);
+            vTaskDelay(pdMS_TO_TICKS(1000));
             esp_wifi_connect();
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
@@ -60,6 +62,11 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         snprintf(s_ip_addr, sizeof(s_ip_addr), IPSTR, IP2STR(&event->ip_info.ip));
         ESP_LOGI(TAG, "Got IP: %s", s_ip_addr);
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_LOST_IP) {
+        ESP_LOGW(TAG, "Lost IP address — triggering reconnect");
+        memset(s_ip_addr, 0, sizeof(s_ip_addr));
+        esp_wifi_disconnect();
+        esp_wifi_connect();
     }
 }
 
@@ -100,6 +107,8 @@ esp_err_t wifi_init_sta(void)
                                                         &event_handler, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
                                                         &event_handler, NULL, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_LOST_IP,
+                                                        &event_handler, NULL, NULL));
 
     // Init provisioning manager with NimBLE scheme.
     // WIFI_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BLE releases BLE memory after provisioning,
@@ -129,8 +138,7 @@ esp_err_t wifi_init_sta(void)
         // STA_START event fires → event_handler calls esp_wifi_connect()
     }
 
-    // Cap TX power to prevent brownouts; disable power save for stable XCLK
-    esp_wifi_set_max_tx_power(32);
+    // Disable power save for stable XCLK timing; full TX power for reliable uplink
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 
     ESP_LOGI(TAG, "Waiting for IP address...");

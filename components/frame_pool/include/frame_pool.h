@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -16,6 +17,7 @@ typedef struct {
     size_t len;         // Length of valid data currently stored
     size_t capacity;    // Maximum capacity of this buffer
     int64_t timestamp;  // Capture timestamp (us)
+    _Atomic uint32_t ref_count; // Atomic reference count
     void *ctx;          // Internal context for the pool manager
 } frame_buffer_t;
 
@@ -30,17 +32,24 @@ esp_err_t frame_pool_init(int count, size_t size);
 
 /**
  * @brief Get a free buffer from the pool.
- * 
- * @return Pointer to a frame_buffer_t, or NULL if no buffers are available.
+ * @param timeout_ms Wait time in milliseconds before failing
+ * @return Pointer to buffer, or NULL if pool is exhausted or timeout occurs
+ *         The returned buffer has ref_count initialized to 1.
  */
-frame_buffer_t* frame_pool_get(void);
+frame_buffer_t* frame_pool_get(uint32_t timeout_ms);
 
 /**
- * @brief Return a buffer to the pool, marking it as available.
- * 
- * @param fb Pointer to the frame_buffer_t to return.
+ * @brief Increment the reference count of a buffer.
+ * @param fb Pointer to buffer
+ * @return The same pointer (for convenience)
  */
-void frame_pool_return(frame_buffer_t *fb);
+frame_buffer_t *frame_pool_ref(frame_buffer_t *fb);
+
+/**
+ * @brief Decrement the reference count. If it reaches 0, the buffer is returned to the pool.
+ * @param fb Pointer to buffer
+ */
+void frame_pool_unref(frame_buffer_t *fb);
 
 #ifdef __cplusplus
 }

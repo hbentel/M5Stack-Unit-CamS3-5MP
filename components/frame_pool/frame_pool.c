@@ -16,6 +16,7 @@ static struct {
     pool_slot_t *slots;
     int count;
     SemaphoreHandle_t mutex;
+    SemaphoreHandle_t available_sem;
 } s_pool = {0};
 
 esp_err_t frame_pool_init(int count, size_t size)
@@ -29,7 +30,8 @@ esp_err_t frame_pool_init(int count, size_t size)
              count, size, (count * size) / 1024);
 
     s_pool.mutex = xSemaphoreCreateMutex();
-    if (!s_pool.mutex) return ESP_ERR_NO_MEM;
+    s_pool.available_sem = xSemaphoreCreateCounting(count, count);
+    if (!s_pool.mutex || !s_pool.available_sem) return ESP_ERR_NO_MEM;
 
     // Allocate the slot metadata array (internal RAM is fine for small structs)
     s_pool.slots = calloc(count, sizeof(pool_slot_t));
@@ -47,6 +49,7 @@ esp_err_t frame_pool_init(int count, size_t size)
         s_pool.slots[i].buffer.buf = ptr;
         s_pool.slots[i].buffer.capacity = size;
         s_pool.slots[i].buffer.len = 0;
+        atomic_init(&s_pool.slots[i].buffer.ref_count, 0);
         s_pool.slots[i].in_use = false;
         s_pool.slots[i].buffer.ctx = (void*)(intptr_t)i; // Store index for debugging
     }
@@ -54,9 +57,14 @@ esp_err_t frame_pool_init(int count, size_t size)
     return ESP_OK;
 }
 
-frame_buffer_t* frame_pool_get(void)
+frame_buffer_t* frame_pool_get(uint32_t timeout_ms)
 {
     if (!s_pool.slots) return NULL;
+
+    if (xSemaphoreTake(s_pool.available_sem, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        ESP_LOGW(TAG, "Pool exhausted! (Capacity: %d, Timeout: %lu ms)", s_pool.count, (unsigned long)timeout_ms);
+        return NULL;
+    }
 
     xSemaphoreTake(s_pool.mutex, portMAX_DELAY);
     
@@ -65,6 +73,7 @@ frame_buffer_t* frame_pool_get(void)
         if (!s_pool.slots[i].in_use) {
             s_pool.slots[i].in_use = true;
             found = &s_pool.slots[i].buffer;
+            atomic_store(&found->ref_count, 1);
             break;
         }
     }
@@ -72,12 +81,22 @@ frame_buffer_t* frame_pool_get(void)
     xSemaphoreGive(s_pool.mutex);
     
     if (!found) {
-        ESP_LOGW(TAG, "Pool exhausted! (Capacity: %d)", s_pool.count);
+        // Should never happen if counting semaphore is correct, but safe fallback
+        xSemaphoreGive(s_pool.available_sem);
+        ESP_LOGE(TAG, "Internal error: No free slot despite semaphore token!");
     }
     return found;
 }
 
-void frame_pool_return(frame_buffer_t *fb)
+frame_buffer_t *frame_pool_ref(frame_buffer_t *fb)
+{
+    if (fb) {
+        atomic_fetch_add(&fb->ref_count, 1);
+    }
+    return fb;
+}
+
+static void frame_pool_return_internal(frame_buffer_t *fb)
 {
     if (!fb || !s_pool.slots) return;
 
@@ -97,9 +116,21 @@ void frame_pool_return(frame_buffer_t *fb)
         }
     }
     
-    if (!returned) {
+    if (returned) {
+        xSemaphoreGive(s_pool.available_sem);
+    } else {
         ESP_LOGE(TAG, "Attempted to return invalid buffer pointer %p", fb);
     }
 
     xSemaphoreGive(s_pool.mutex);
+}
+
+void frame_pool_unref(frame_buffer_t *fb)
+{
+    if (fb) {
+        if (atomic_fetch_sub(&fb->ref_count, 1) == 1) {
+            // We were the last holder (count went from 1 to 0)
+            frame_pool_return_internal(fb);
+        }
+    }
 }

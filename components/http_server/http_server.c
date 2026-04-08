@@ -5,6 +5,7 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "esp_partition.h"
+#include "lwip/sockets.h"
 #include "jpeg_validate.h"
 #include "frame_pool.h"
 #include "wifi.h"
@@ -30,7 +31,6 @@ static volatile bool s_ota_pending = false;
 
 #define MJPEG_BOUNDARY "frame"
 #define STREAM_PART_HDR "--" MJPEG_BOUNDARY "\r\nContent-Type: image/jpeg\r\nContent-Length: %zu\r\n\r\n"
-#define STREAM_FRAME_INTERVAL_MS 100 // ~10 FPS target (updated from 250)
 
 // Multi-client MJPEG structures
 typedef struct {
@@ -58,82 +58,73 @@ static int64_t s_boot_time_us;
 // Handler for the "/" endpoint — returns a single JPEG snapshot
 static esp_err_t capture_handler(httpd_req_t *req)
 {
-    ESP_LOGI(TAG, "Received request for JPEG frame...");
+    ESP_LOGI(TAG, "Snapshot requested");
 
-    // 1. Acquire a buffer from the pool first
-    //    If pool is empty, we are too busy to serve.
-    frame_buffer_t *pool_fb = frame_pool_get();
-    if (!pool_fb) {
-        ESP_LOGE(TAG, "Frame pool exhausted! Dropping request.");
+    if (s_ota_pending) {
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
 
-    // 2. Grab a fresh frame (CAMERA_GRAB_LATEST ensures it's recent)
-    camera_fb_t *fb = esp_camera_fb_get();
+    frame_buffer_t *pool_fb = NULL;
+    camera_fb_t *cam_fb = NULL;
 
-    if (!fb) {
-        ESP_LOGW(TAG, "Capture failed, reinitializing camera...");
-        esp_err_t err = camera_reinit();
-        if (err == ESP_OK) {
-            fb = esp_camera_fb_get();
+    // 1. Try to grab a reference to the active stream frame (Zero hardware contention)
+    if (s_broadcast_mutex) {
+        xSemaphoreTake(s_broadcast_mutex, portMAX_DELAY);
+        if (s_broadcast_fb) {
+            pool_fb = frame_pool_ref(s_broadcast_fb);
         }
+        xSemaphoreGive(s_broadcast_mutex);
     }
 
-    if (!fb) {
-        ESP_LOGE(TAG, "Camera capture failed even after reinit");
-        frame_pool_return(pool_fb); // Release pool buffer
-        httpd_resp_send_500(req);
-        return ESP_FAIL;
-    }
-
-    // 3. Validate JPEG integrity before copying
-    if (!jpeg_validate_frame(fb)) {
-        ESP_LOGW(TAG, "Invalid JPEG, retrying once...");
-        esp_camera_fb_return(fb);
-        fb = esp_camera_fb_get();
-        if (!fb || !jpeg_validate_frame(fb)) {
-            if (fb) esp_camera_fb_return(fb);
-            frame_pool_return(pool_fb); // Release pool buffer
-            ESP_LOGE(TAG, "JPEG validation failed twice");
+    // 2. If no stream is active, capture directly from camera
+    if (!pool_fb) {
+        cam_fb = esp_camera_fb_get();
+        if (!cam_fb) {
+            ESP_LOGW(TAG, "Snapshot: failed to get frame, reinitializing...");
+            esp_err_t err = camera_reinit();
+            if (err == ESP_OK) {
+                cam_fb = esp_camera_fb_get();
+            }
+        }
+        if (!cam_fb) {
+            ESP_LOGE(TAG, "Snapshot: camera capture failed");
             httpd_resp_send_500(req);
             return ESP_FAIL;
         }
+
+        // Validate JPEG integrity
+        if (!jpeg_validate_frame(cam_fb)) {
+            ESP_LOGW(TAG, "Invalid JPEG, retrying once...");
+            esp_camera_fb_return(cam_fb);
+            cam_fb = esp_camera_fb_get();
+            if (!cam_fb || !jpeg_validate_frame(cam_fb)) {
+                if (cam_fb) esp_camera_fb_return(cam_fb);
+                ESP_LOGE(TAG, "JPEG validation failed");
+                httpd_resp_send_500(req);
+                return ESP_FAIL;
+            }
+        }
     }
 
-    // 4. Verify size fits in pool buffer
-    if (fb->len > pool_fb->capacity) {
-        ESP_LOGE(TAG, "Frame too large for pool! (%zu > %zu)", fb->len, pool_fb->capacity);
-        esp_camera_fb_return(fb);
-        frame_pool_return(pool_fb);
-        httpd_resp_send_500(req);
-        return ESP_FAIL;
-    }
+    // 3. Set headers
+    httpd_resp_set_type(req, "image/jpeg");
+    httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.jpg");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
 
-    // 5. Copy data to pool buffer (Deep Copy)
-    //    This decouples the camera driver from the network stack.
-    memcpy(pool_fb->buf, fb->buf, fb->len);
-    pool_fb->len = fb->len;
-    pool_fb->timestamp = fb->timestamp.tv_sec * 1000000 + fb->timestamp.tv_usec;
-
-    // 6. Return driver buffer IMMEDIATELY
-    //    Camera can now capture the next frame while we send this one.
-    esp_camera_fb_return(fb);
-
-    // 7. Send from pool buffer
-    //    httpd_resp_send() is synchronous and slow (network speed).
-    esp_err_t res = httpd_resp_set_type(req, "image/jpeg");
-    if (res == ESP_OK) {
-        res = httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.jpg");
-    }
-    if (res == ESP_OK) {
-        res = httpd_resp_send(req, (const char *)pool_fb->buf, pool_fb->len);
-    }
-
-    size_t sent_len = pool_fb->len;
+    // 4. Send the payload
+    esp_err_t res;
+    size_t sent_len = 0;
     
-    // 8. Return pool buffer
-    frame_pool_return(pool_fb);
+    if (pool_fb) {
+        res = httpd_resp_send(req, (const char *)pool_fb->buf, pool_fb->len);
+        sent_len = pool_fb->len;
+        frame_pool_unref(pool_fb);
+    } else {
+        res = httpd_resp_send(req, (const char *)cam_fb->buf, cam_fb->len);
+        sent_len = cam_fb->len;
+        esp_camera_fb_return(cam_fb);
+    }
 
     ESP_LOGI(TAG, "JPEG sent (%zu bytes, heap free: %lu)",
              sent_len, (unsigned long)heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
@@ -248,9 +239,11 @@ static esp_err_t stats_handler(httpd_req_t *req)
 static void mjpeg_broadcaster_task(void *arg)
 {
     ESP_LOGI(TAG, "MJPEG broadcaster task started on Core 1");
+    esp_task_wdt_add(NULL);
     uint32_t fail_count = 0;
 
     while (1) {
+        esp_task_wdt_reset();
         if (s_ota_pending) goto broadcaster_exit;
 
         // Check for active clients before capturing
@@ -297,7 +290,7 @@ static void mjpeg_broadcaster_task(void *arg)
         }
 
         // Copy to a new pool buffer for broadcast
-        frame_buffer_t *new_fb = frame_pool_get();
+        frame_buffer_t *new_fb = frame_pool_get(100); // 100ms timeout
         if (new_fb) {
             memcpy(new_fb->buf, fb->buf, fb->len);
             new_fb->len = fb->len;
@@ -305,12 +298,12 @@ static void mjpeg_broadcaster_task(void *arg)
             // Swap global pointer
             xSemaphoreTake(s_broadcast_mutex, portMAX_DELAY);
             frame_buffer_t *old_fb = s_broadcast_fb;
-            s_broadcast_fb = new_fb;
+            s_broadcast_fb = new_fb; // Broadcaster's ref_count=1 transfers to global
             s_broadcast_frame_id++;
             xSemaphoreGive(s_broadcast_mutex);
 
-            // Release old frame
-            if (old_fb) frame_pool_return(old_fb);
+            // Release old frame (if no workers hold it, it returns to pool)
+            if (old_fb) frame_pool_unref(old_fb);
 
             // Signal all clients
             if (s_clients_mutex) {
@@ -325,14 +318,15 @@ static void mjpeg_broadcaster_task(void *arg)
         }
 
         esp_camera_fb_return(fb);
-        vTaskDelay(pdMS_TO_TICKS(STREAM_FRAME_INTERVAL_MS));
+        // Remove vTaskDelay to allow pull-based pacing; broadcaster runs at camera speed
     }
 
 broadcaster_exit:
     ESP_LOGW(TAG, "Broadcaster: shutting down");
+    esp_task_wdt_delete(NULL);
     xSemaphoreTake(s_broadcast_mutex, portMAX_DELAY);
     if (s_broadcast_fb) {
-        frame_pool_return(s_broadcast_fb);
+        frame_pool_unref(s_broadcast_fb);
         s_broadcast_fb = NULL;
     }
     xSemaphoreGive(s_broadcast_mutex);
@@ -348,6 +342,10 @@ static void mjpeg_client_worker_task(void *arg)
 
     ESP_LOGI(TAG, "MJPEG worker started for socket %d", sockfd);
 
+    // Set socket send timeout to gracefully handle stalled clients
+    struct timeval tv = { .tv_sec = 10, .tv_usec = 0 };
+    setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
     // Set headers (part of the async response)
     httpd_resp_set_type(req, "multipart/x-mixed-replace; boundary=" MJPEG_BOUNDARY);
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -358,34 +356,23 @@ static void mjpeg_client_worker_task(void *arg)
     uint32_t last_sent_id = 0;
     esp_err_t res = ESP_OK;
 
-    // Use a local buffer to hold the frame during network send
-    // to avoid holding s_broadcast_mutex for too long.
-    frame_buffer_t *local_fb = frame_pool_get();
-    if (!local_fb) {
-        ESP_LOGE(TAG, "Worker: failed to get pool buffer, aborting");
-        goto cleanup;
-    }
-
     while (res == ESP_OK && !s_ota_pending) {
         // Wait for broadcaster signal (up to 1s)
         if (xSemaphoreTake(client->sync_sem, pdMS_TO_TICKS(1000)) != pdTRUE) {
             continue; // No new frame within timeout
         }
 
-        // Copy latest frame to local buffer
+        frame_buffer_t *local_fb = NULL;
+
+        // Grab reference to current broadcast frame
         xSemaphoreTake(s_broadcast_mutex, portMAX_DELAY);
         if (s_broadcast_fb && s_broadcast_frame_id != last_sent_id) {
-            if (s_broadcast_fb->len <= local_fb->capacity) {
-                memcpy(local_fb->buf, s_broadcast_fb->buf, s_broadcast_fb->len);
-                local_fb->len = s_broadcast_fb->len;
-                last_sent_id = s_broadcast_frame_id;
-            } else {
-                ESP_LOGW(TAG, "Worker: broadcast frame too large for local buffer");
-            }
+            local_fb = frame_pool_ref(s_broadcast_fb);
+            last_sent_id = s_broadcast_frame_id;
         }
         xSemaphoreGive(s_broadcast_mutex);
 
-        if (local_fb->len == 0) continue;
+        if (!local_fb) continue;
 
         // Send multipart boundary + headers
         int hdr_len = snprintf(part_hdr, sizeof(part_hdr), STREAM_PART_HDR, local_fb->len);
@@ -398,12 +385,13 @@ static void mjpeg_client_worker_task(void *arg)
             res = httpd_resp_send_chunk(req, "\r\n", 2);
         }
 
+        // Release reference (returns to pool if broadcaster and all other workers are done)
+        frame_pool_unref(local_fb);
+
         frame_count++;
     }
 
-cleanup:
     ESP_LOGI(TAG, "MJPEG worker for socket %d stopping (frames: %lu)", sockfd, frame_count);
-    if (local_fb) frame_pool_return(local_fb);
 
     // Free the request (important for async)
     httpd_req_async_handler_complete(req);

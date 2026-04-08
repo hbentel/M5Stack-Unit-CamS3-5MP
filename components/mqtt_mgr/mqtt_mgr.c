@@ -323,7 +323,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         esp_mqtt_client_subscribe(client, cmd_sub, 0);
 
         snprintf(cmd_sub, sizeof(cmd_sub), "%s/ota/set", base_topic);
-        esp_mqtt_client_subscribe(client, cmd_sub, 0);
+        esp_mqtt_client_subscribe(client, cmd_sub, 1); // QoS 1 — ensures delivery survives brief disconnects
 
         // Publish Initial State
         char topic[128];

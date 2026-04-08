@@ -16,15 +16,28 @@ PY260 sensor → GDMA → PSRAM frame buffers (4 × ~512 KB)
                               ↓
                   mjpeg_broadcaster_task (Core 1)
                   - idles when 0 clients connected
-                  - copies to frame_pool (8 × 512 KB PSRAM)
-                  - signals active worker tasks
+                  - copies camera frame to frame_pool (one copy, unavoidable)
+                  - sets s_broadcast_fb = new buffer (ref_count = 1)
+                  - signals active worker tasks via binary semaphores
+                  - registered with Task WDT (30 s panic on hang)
                               ↓
                   mjpeg_client_worker_task (Core 1)
+                  - grabs atomic ref to s_broadcast_fb (no copy)
+                  - all workers share the same PSRAM buffer via ref count
                   - 1 task per connection (max 5)
-                  - sends from frame_pool to socket
+                  - sends from frame_pool buffer directly to socket
+                  - SO_SNDTIMEO (10 s) handles stalled clients gracefully
+                  - frame_pool_unref() on completion → buffer returns to pool
+                    when ref_count reaches 0
                               ↓
                   Frigate / Browser MJPEG client
 ```
+
+**Frame pool sizing:** 3 slots × 512 KB = 1.5 MB PSRAM. Peak simultaneous usage
+is 2 slots (broadcaster's current frame + workers mid-send). The 3rd slot covers
+the transitional moment when the broadcaster has written a new frame but not yet
+unreffed the old one. All workers share a single ref to the same buffer — no
+per-worker copy is made.
 
 **Core assignments:**
 - Core 0: Wi-Fi / lwIP stack
@@ -83,7 +96,7 @@ This firmware uses a strict memory allocation strategy to ensure stability on th
   The main initialization task stack is increased to 16 KB to accommodate heavy simultaneous startup of mDNS, MQTT, and the Camera driver.
 
 - **Frame Buffers (PSRAM ONLY)**: 
-  Large image data is kept in PSRAM to prevent internal memory exhaustion. The `frame_pool` is sized at 4MB (8 × 512 KB buffers).
+  Large image data is kept in PSRAM to prevent internal memory exhaustion. The `frame_pool` uses 3 × 512 KB buffers (1.5 MB total). With atomic reference counting, workers share refs to the same buffer rather than holding private copies, so 3 slots are sufficient for peak load.
 
 ---
 
@@ -197,13 +210,43 @@ the flag — preventing deliberate reboots from tripping the boot-loop threshold
 | Component | Purpose |
 |-----------|---------|
 | `esp32-camera/` | Forked M5Stack driver — PY260/mega_ccm only, JPEG only, ISR on Core 1 |
-| `frame_pool/` | Pre-allocates 8 × 512 KB PSRAM buffers at boot; ring-buffer semantics |
+| `frame_pool/` | 3 × 512 KB PSRAM buffers; C11 atomic ref counting (`frame_pool_ref`/`frame_pool_unref`) for zero-copy multi-client delivery |
 | `jpeg_validate/` | SOI/EOI boundary check + atomic drop counter |
 | `http_server/` | Port 80: snapshot, health (incl. `reset_reason`), stats, coredump, logs; Port 81: MJPEG stream |
 | `log_buf/` | 16 KB PSRAM ring buffer hooked into `esp_log_set_vprintf()`; exposes `log_buf_snapshot()` for `/api/logs` |
 | `mqtt_mgr/` | MQTT client, HA auto-discovery, telemetry every 10 s, command handling |
 | `ota_mgr/` | URL-based OTA via MQTT, RTC NOINIT URL storage, OTA callback registration |
 | `recovery_mgr/` | NVS boot-loop detection, 2-min health timer, planned-reboot signalling |
+
+---
+
+## Wi-Fi Reliability
+
+### TX Power
+
+Do **not** cap Wi-Fi TX power with `esp_wifi_set_max_tx_power()`. The default
+ceiling (~20 dBm) is required for reliable uplink. Capping at 32 units (8 dBm)
+reduces transmit power by 12 dBm — a 16× reduction — causing the AP to
+aggressively drop the client even when the downlink RSSI appears healthy. The
+asymmetry between downlink (AP → device) and uplink (device → AP) RSSI means a
+−56 dBm downlink can coexist with an unacceptable uplink at 8 dBm TX.
+
+### Reconnect Strategy
+
+`WIFI_PS_NONE` (power save disabled) is mandatory. Power save mode allows the AP
+to buffer packets between beacon intervals, introducing latency spikes that stall
+the MJPEG stream and trigger `SO_SNDTIMEO` timeouts on worker tasks.
+
+A 1 s backoff delay before `esp_wifi_connect()` retry prevents rapid reconnect
+storms. Without it, a briefly-unavailable AP receives a flood of auth requests and
+may rate-limit or ban the device.
+
+### IP Loss
+
+Both `IP_EVENT_STA_GOT_IP` and `IP_EVENT_STA_LOST_IP` must be handled.
+`STA_LOST_IP` fires when the DHCP lease is not renewed but no `STA_DISCONNECTED`
+event is generated — without this handler the device remains Wi-Fi associated but
+has no IP, silently stalling all HTTP and MQTT traffic.
 
 ---
 

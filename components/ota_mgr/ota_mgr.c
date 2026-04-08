@@ -105,7 +105,7 @@ static void rtc_clear_url(void)
 // ========================================
 
 // Maximum firmware binary we will accept (must fit in free PSRAM at OTA time).
-// frame_pool (4×512KB) is already allocated before OTA runs, leaving ~6MB.
+// frame_pool (3×512KB = 1.5MB) is already allocated before OTA runs, leaving ~6MB free.
 #define OTA_MAX_FW_SIZE (4 * 1024 * 1024)  // 4 MB ceiling
 
 static esp_err_t run_ota_from_url(const char *url)

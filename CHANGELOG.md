@@ -5,6 +5,73 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.3] — 2026-04-05
+
+### Added
+
+- **Zero-copy MJPEG delivery** — refactored `frame_pool` to use C11 atomic
+  reference counting. Multiple clients now stream from the same PSRAM buffer
+  simultaneously, reducing bus load by ~80%.
+- **Worker reliability** — implemented `SO_SNDTIMEO` (10s) on stream sockets.
+  Stalled or slow clients now fail gracefully without hanging worker tasks.
+- **Optimized snapshots** — the `/` endpoint now grabs a reference to the active
+  broadcaster frame if available, eliminating hardware contention during streams.
+
+### Fixed
+
+- **Watchdog safety** — re-enabled Task WDT Panic for production auto-recovery.
+- **Broadcaster stability** — added Task WDT registration and removed artificial
+  frame pacing; broadcaster now runs at max camera speed with pull-based worker pacing.
+- **Memory safety** — increased main task stack to 16KB and system event stack
+  to 4096B; forced all task stacks to internal SRAM to prevent flash-write crashes.
+
+## [v0.2.3] — 2026-04-07
+
+### Added
+
+- **Zero-copy MJPEG streaming** — `frame_pool` now uses C11 `<stdatomic.h>` atomic
+  reference counting. The broadcaster captures one frame; all worker tasks share a
+  reference to the same PSRAM buffer. Eliminates 5 concurrent `memcpy` calls per
+  frame, reducing PSRAM bus load by ~80%.
+- **Pull-based pacing** — removed the artificial 100 ms broadcaster delay. The
+  broadcaster runs at full camera speed (~9.4 fps); each client worker's TCP send
+  latency acts as its own rate limiter. A slow Frigate client always gets the latest
+  available frame via binary semaphore coalescing.
+- **Unified snapshot** (`GET /`) — when the broadcaster is active, the snapshot
+  endpoint grabs a reference to the current stream frame instead of calling
+  `esp_camera_fb_get()` independently. Zero hardware contention with the stream.
+- **`SO_SNDTIMEO` on worker sockets** (10 s) — a stalled client causes
+  `httpd_resp_send_chunk` to time out and the worker to exit cleanly, freeing its
+  slot and pool reference without hanging the device.
+- **Broadcaster Task WDT** — `mjpeg_broadcaster_task` registered with Task Watchdog;
+  triggers 30 s panic if the broadcaster hangs.
+- **`IP_EVENT_STA_LOST_IP` handler** — device now reconnects if IP is lost silently
+  due to DHCP failure (previously only reconnected on explicit disconnect events).
+- **Stress test script** — `test_stream_stress.py` opens N simultaneous streams,
+  reports per-client FPS, bad JPEG count, max frame gap, and device-side stats.
+
+### Fixed
+
+- **Wi-Fi TX power cap removed** — `esp_wifi_set_max_tx_power(32)` (8 dBm) was the
+  primary cause of 105 Wi-Fi disconnects. Removing it restored full 20 dBm TX power.
+  RSSI at AP improved from −56 dBm to −27 dBm; disconnect count dropped to 0.
+- **Disconnect reason logged** — `WIFI_EVENT_STA_DISCONNECTED` now logs the reason
+  code (`beacon_timeout`, `auth_expire`, etc.) for field diagnostics.
+- **Reconnect backoff** — 1 s delay before `esp_wifi_connect()` retry prevents
+  rapid reconnect storms against the AP.
+- **OTA MQTT subscription QoS 0 → 1** — `unitcams3/ota/set` subscription now uses
+  QoS 1 so the broker retries delivery after a brief MQTT reconnect; QoS 0 messages
+  published during a disconnect window were silently lost.
+- **Frame pool reduced 8 → 3 slots** — with atomic ref counting, peak simultaneous
+  usage is 2 slots (broadcaster current + workers mid-send, all sharing one ref).
+  3rd slot covers the transitional swap. Frees 2.5 MB PSRAM (4 MB → 1.5 MB).
+- **Dead `STREAM_FRAME_INTERVAL_MS` define removed** — unused constant left over
+  from pre-pull-pacing design.
+- **Stale comment in `ota_mgr.c`** — updated frame pool size reference from
+  `4×512KB` to `3×512KB`.
+
+---
+
 ## [v0.2.2] — 2026-04-05
 
 ### Fixed
