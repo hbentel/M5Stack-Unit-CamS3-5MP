@@ -21,3 +21,17 @@ typedef struct {
 } wifi_stats_t;
 
 void wifi_get_stats(wifi_stats_t *stats);
+
+/**
+ * @brief Erase Wi-Fi credentials and reboot into BLE provisioning.
+ *
+ * Stores a magic value in RTC_NOINIT memory (survives esp_restart()),
+ * signals a planned reboot (prevents boot-loop counter from tripping),
+ * then calls esp_restart(). On the next boot, wifi_init_sta() detects
+ * the magic and calls wifi_prov_mgr_reset_provisioning() before the
+ * provisioning check, causing the device to enter BLE provisioning mode.
+ *
+ * Safe to call while camera DMA is running: uses RTC SRAM only, no flash write.
+ * The NVS erase happens on the next boot, before esp_camera_init().
+ */
+void wifi_start_reprovision(void);

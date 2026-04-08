@@ -31,6 +31,9 @@ void http_server_prepare_ota(void);
 // Returns the number of active MJPEG stream clients
 uint8_t http_server_get_active_streams(void);
 
+// Returns number of camera_reinit() calls triggered by the broadcaster
+uint32_t http_server_get_reinit_count(void);
+
 #ifdef __cplusplus
 }
 #endif

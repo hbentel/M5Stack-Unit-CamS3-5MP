@@ -8,9 +8,25 @@
 #include "freertos/event_groups.h"
 #include "wifi_provisioning/manager.h"
 #include "wifi_provisioning/scheme_ble.h"
+#include "esp_attr.h"
+#include "recovery_mgr.h"
 
 static const char *TAG = "wifi";
 static uint32_t s_disconnect_count = 0;
+
+// ========================================
+// Re-provisioning via RTC_NOINIT (same pattern as OTA URL)
+// ========================================
+RTC_NOINIT_ATTR static uint32_t s_reprovision_magic;
+#define REPROVISION_MAGIC 0xDEADB0B0U
+
+void wifi_start_reprovision(void)
+{
+    s_reprovision_magic = REPROVISION_MAGIC;
+    recovery_mgr_signal_planned_reboot(); // Prevents boot-loop counter from tripping
+    ESP_LOGW(TAG, "Reprovision requested — rebooting into BLE provisioning...");
+    esp_restart();
+}
 static char s_ip_addr[16] = {0};
 static volatile bool s_provisioning_active = false;
 
@@ -84,6 +100,14 @@ void wifi_get_stats(wifi_stats_t *stats)
 
 esp_err_t wifi_init_sta(void)
 {
+    // Check for reprovision request written by wifi_start_reprovision() on the previous boot.
+    // The magic survives esp_restart() via RTC_NOINIT_ATTR (no-load section, bootloader skips it).
+    bool reprovision = (s_reprovision_magic == REPROVISION_MAGIC);
+    if (reprovision) {
+        s_reprovision_magic = 0; // Clear before any potential crash
+        ESP_LOGW(TAG, "Reprovision magic detected — will clear Wi-Fi credentials");
+    }
+
     // NVS is required by Wi-Fi driver and provisioning manager
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -118,6 +142,13 @@ esp_err_t wifi_init_sta(void)
         .scheme_event_handler = WIFI_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BLE,
     };
     ESP_ERROR_CHECK(wifi_prov_mgr_init(prov_config));
+
+    if (reprovision) {
+        // Erases the "provisioned" flag in NVS so is_provisioned() returns false below.
+        // NVS write is safe here: camera DMA has not started yet.
+        wifi_prov_mgr_reset_provisioning();
+        ESP_LOGW(TAG, "Wi-Fi credentials cleared — entering BLE provisioning");
+    }
 
     bool provisioned = false;
     ESP_ERROR_CHECK(wifi_prov_mgr_is_provisioned(&provisioned));

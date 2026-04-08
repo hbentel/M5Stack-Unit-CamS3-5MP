@@ -241,6 +241,7 @@ void app_main(void)
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "MQTT Init Failed! Continuing...");
         }
+        mqtt_mgr_register_reprovision_callback(wifi_start_reprovision);
     } else {
         ESP_LOGI(TAG, "MQTT disabled by config — skipping");
     }

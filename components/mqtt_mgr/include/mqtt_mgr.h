@@ -36,6 +36,14 @@ void mqtt_mgr_stop(void);
  */
 void mqtt_mgr_register_ota_callback(esp_err_t (*cb)(const char *url));
 
+/**
+ * @brief Register a callback for Wi-Fi re-provisioning commands received via MQTT.
+ *        Called by main.c after mqtt_mgr_start() to avoid a circular link dependency.
+ *        The callback should call wifi_start_reprovision() which writes RTC_NOINIT magic
+ *        and calls esp_restart() — no return expected.
+ */
+void mqtt_mgr_register_reprovision_callback(void (*cb)(void));
+
 #ifdef __cplusplus
 }
 #endif

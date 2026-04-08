@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdatomic.h>
 #include "esp_task_wdt.h"
 #include "esp_app_desc.h"
 #include "esp_system.h"
@@ -48,6 +49,13 @@ static frame_buffer_t *s_broadcast_fb = NULL; // Current latest frame
 static SemaphoreHandle_t s_broadcast_mutex = NULL;
 static uint32_t s_broadcast_frame_id = 0;
 static TaskHandle_t s_broadcaster_task_handle = NULL;
+
+// Observability counters
+static _Atomic uint32_t s_reinit_count = 0;     // camera_reinit() calls from broadcaster
+static _Atomic uint32_t s_frames_delivered = 0; // successful worker frame sends (all clients)
+static uint32_t s_broadcaster_hwm_words = 0;    // broadcaster stack HWM, updated every 100 frames
+
+uint32_t http_server_get_reinit_count(void) { return atomic_load(&s_reinit_count); }
 
 // Forward declaration - defined in main.c
 extern esp_err_t camera_reinit(void);
@@ -177,8 +185,10 @@ static esp_err_t health_handler(httpd_req_t *req)
 static esp_err_t stats_handler(httpd_req_t *req)
 {
     static uint32_t last_vsync = 0;
+    static uint32_t last_broadcast_id = 0;
     static int64_t last_time = 0;
-    static float fps = 0;
+    static float vsync_fps = 0;
+    static float broadcast_fps = 0;
 
     cam_stats_t cam;
     wifi_stats_t wifi;
@@ -186,25 +196,35 @@ static esp_err_t stats_handler(httpd_req_t *req)
     wifi_get_stats(&wifi);
 
     int64_t now = esp_timer_get_time();
+    int64_t uptime_s = now / 1000000;
     if (last_time > 0) {
-        uint32_t diff = cam.vsync_isr_count - last_vsync;
-        fps = (float)diff / ((now - last_time) / 1000000.0f);
+        float elapsed = (now - last_time) / 1000000.0f;
+        vsync_fps = (float)(cam.vsync_isr_count - last_vsync) / elapsed;
+        broadcast_fps = (float)(s_broadcast_frame_id - last_broadcast_id) / elapsed;
     }
     last_vsync = cam.vsync_isr_count;
+    last_broadcast_id = s_broadcast_frame_id;
     last_time = now;
 
-    char buf[1024];
+    // Stack HWM of the HTTP server task (this task, sampled live)
+    uint32_t http_task_hwm = uxTaskGetStackHighWaterMark(NULL);
+
+    char buf[1536];
     int len = snprintf(buf, sizeof(buf),
         "{"
+        "\"uptime_s\":%lld,"
         "\"camera\":{"
             "\"fps\":%.2f,"
+            "\"broadcast_fps\":%.2f,"
             "\"vsync_count\":%lu,"
             "\"eof_count\":%lu,"
             "\"no_soi\":%lu,"
             "\"no_eoi\":%lu,"
             "\"queue_overflow\":%lu,"
             "\"drops_no_buf\":%lu,"
+            "\"reinit_count\":%lu,"
             "\"active_streams\":%u,"
+            "\"frames_delivered\":%lu,"
             "\"soi_hist\":[%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu]"
         "},"
         "\"wifi\":{"
@@ -215,17 +235,29 @@ static esp_err_t stats_handler(httpd_req_t *req)
         "\"memory\":{"
             "\"internal_free\":%zu,"
             "\"psram_free\":%zu"
+        "},"
+        "\"stack_hwm\":{"
+            "\"broadcaster_words\":%lu,"
+            "\"http_task_words\":%lu"
         "}"
         "}",
-        fps, cam.vsync_isr_count, cam.eof_count, cam.no_soi_count, cam.no_eoi_count,
-        cam.queue_overflow_count, cam.drops_no_free_buf,
+        (long long)uptime_s,
+        vsync_fps, broadcast_fps,
+        (unsigned long)cam.vsync_isr_count, (unsigned long)cam.eof_count,
+        (unsigned long)cam.no_soi_count, (unsigned long)cam.no_eoi_count,
+        (unsigned long)cam.queue_overflow_count, (unsigned long)cam.drops_no_free_buf,
+        (unsigned long)atomic_load(&s_reinit_count),
         http_server_get_active_streams(),
-        cam.soi_offset_histogram[0], cam.soi_offset_histogram[1], cam.soi_offset_histogram[2],
-        cam.soi_offset_histogram[3], cam.soi_offset_histogram[4], cam.soi_offset_histogram[5],
-        cam.soi_offset_histogram[6], cam.soi_offset_histogram[7],
-        wifi.rssi, wifi.disconnect_count, wifi.ip,
+        (unsigned long)atomic_load(&s_frames_delivered),
+        (unsigned long)cam.soi_offset_histogram[0], (unsigned long)cam.soi_offset_histogram[1],
+        (unsigned long)cam.soi_offset_histogram[2], (unsigned long)cam.soi_offset_histogram[3],
+        (unsigned long)cam.soi_offset_histogram[4], (unsigned long)cam.soi_offset_histogram[5],
+        (unsigned long)cam.soi_offset_histogram[6], (unsigned long)cam.soi_offset_histogram[7],
+        wifi.rssi, (unsigned long)wifi.disconnect_count, wifi.ip,
         heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-        heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+        (unsigned long)s_broadcaster_hwm_words,
+        (unsigned long)http_task_hwm);
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -275,6 +307,7 @@ static void mjpeg_broadcaster_task(void *arg)
             fail_count++;
             if (fail_count >= 10) {
                 ESP_LOGE(TAG, "Broadcaster: hard camera stall, reinit...");
+                atomic_fetch_add(&s_reinit_count, 1);
                 camera_reinit();
                 fail_count = 0;
             }
@@ -282,6 +315,11 @@ static void mjpeg_broadcaster_task(void *arg)
             continue;
         }
         fail_count = 0;
+
+        // Sample our own stack HWM every 100 frames (cheap enough, no lock needed)
+        if (s_broadcast_frame_id % 100 == 0) {
+            s_broadcaster_hwm_words = uxTaskGetStackHighWaterMark(NULL);
+        }
 
         // Basic JPEG validation
         if (fb->len < 100 || fb->buf[0] != 0xFF || fb->buf[1] != 0xD8) {
@@ -388,6 +426,9 @@ static void mjpeg_client_worker_task(void *arg)
         // Release reference (returns to pool if broadcaster and all other workers are done)
         frame_pool_unref(local_fb);
 
+        if (res == ESP_OK) {
+            atomic_fetch_add(&s_frames_delivered, 1);
+        }
         frame_count++;
     }
 

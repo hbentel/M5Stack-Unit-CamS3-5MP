@@ -19,6 +19,13 @@ void mqtt_mgr_register_ota_callback(esp_err_t (*cb)(const char *url)) {
     s_ota_cb = cb;
 }
 
+// Reprovision callback — registered by main.c to break circular link dependency
+static void (*s_reprovision_cb)(void) = NULL;
+
+void mqtt_mgr_register_reprovision_callback(void (*cb)(void)) {
+    s_reprovision_cb = cb;
+}
+
 static const char *TAG = "mqtt";
 
 static esp_mqtt_client_handle_t client = NULL;
@@ -148,6 +155,14 @@ static void send_ha_discovery(void)
     snprintf(state_topic, sizeof(state_topic), "%s/ota_status", base_topic);
     publish_discovery("sensor", "ota_status", "OTA Status", NULL, NULL, NULL, state_topic, 0, 0);
 
+    // Camera Reinit Events
+    snprintf(state_topic, sizeof(state_topic), "%s/reinit_count", base_topic);
+    publish_discovery("sensor", "reinit_count", "Camera Reinit Events", NULL, NULL, NULL, state_topic, 0, 0);
+
+    // Low Heap (binary sensor — fires when internal SRAM free < 40 KB)
+    snprintf(state_topic, sizeof(state_topic), "%s/low_heap", base_topic);
+    publish_discovery("binary_sensor", "low_heap", "Low Heap", "problem", NULL, NULL, state_topic, 0, 0);
+
     // Reboot Button
     snprintf(cmd_topic, sizeof(cmd_topic), "%s/restart", base_topic);
     publish_discovery("button", "restart", "Restart Camera", "restart", NULL, cmd_topic, NULL, 0, 0);
@@ -202,6 +217,9 @@ static void handle_command(const char *topic_ptr, int topic_len, const char *dat
         url[url_len] = '\0';
         ESP_LOGI(TAG, "OTA URL received: %s", url);
         if (s_ota_cb) s_ota_cb(url);
+    } else if (strstr(topic, "reprovision")) {
+        ESP_LOGW(TAG, "Re-provisioning requested via MQTT");
+        if (s_reprovision_cb) s_reprovision_cb();
     } else if (strstr(topic, "restart")) {
         ESP_LOGW(TAG, "Restarting via MQTT command...");
         esp_restart();
@@ -285,6 +303,23 @@ static void mqtt_telemetry_task(void *arg)
             snprintf(topic, sizeof(topic), "%s/streams", base_topic);
             snprintf(payload, sizeof(payload), "%u", http_server_get_active_streams());
             esp_mqtt_client_publish(client, topic, payload, 0, 0, 0);
+
+            // Camera Reinit Events
+            snprintf(topic, sizeof(topic), "%s/reinit_count", base_topic);
+            snprintf(payload, sizeof(payload), "%lu",
+                     (unsigned long)http_server_get_reinit_count());
+            esp_mqtt_client_publish(client, topic, payload, 0, 0, 0);
+
+            // Low Heap alert (ON/OFF binary sensor — threshold 40 KB internal SRAM)
+            #define LOW_HEAP_THRESHOLD_BYTES 40000
+            size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            snprintf(topic, sizeof(topic), "%s/low_heap", base_topic);
+            if (internal_free < LOW_HEAP_THRESHOLD_BYTES) {
+                ESP_LOGW(TAG, "Low internal heap: %zu bytes", internal_free);
+                esp_mqtt_client_publish(client, topic, "ON", 0, 0, 0);
+            } else {
+                esp_mqtt_client_publish(client, topic, "OFF", 0, 0, 0);
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(10000)); // Every 10 seconds
     }
@@ -324,6 +359,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
         snprintf(cmd_sub, sizeof(cmd_sub), "%s/ota/set", base_topic);
         esp_mqtt_client_subscribe(client, cmd_sub, 1); // QoS 1 — ensures delivery survives brief disconnects
+
+        snprintf(cmd_sub, sizeof(cmd_sub), "%s/reprovision", base_topic);
+        esp_mqtt_client_subscribe(client, cmd_sub, 1); // QoS 1 — same reasoning as OTA
 
         // Publish Initial State
         char topic[128];
