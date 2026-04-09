@@ -34,6 +34,10 @@ uint8_t http_server_get_active_streams(void);
 // Returns number of camera_reinit() calls triggered by the broadcaster
 uint32_t http_server_get_reinit_count(void);
 
+// Set broadcaster FPS cap (0 = unlimited, 1-15 = max fps delivered to clients).
+// Takes effect immediately. Not persisted across reboot.
+void http_server_set_fps_cap(uint8_t fps_cap);
+
 #ifdef __cplusplus
 }
 #endif

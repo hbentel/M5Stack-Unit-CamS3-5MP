@@ -179,6 +179,11 @@ static void send_ha_discovery(void)
     snprintf(state_topic, sizeof(state_topic), "%s/heap_min", base_topic);
     publish_discovery("sensor", "heap_min", "Heap Min (internal)", "data_size", "B", NULL, state_topic, 0, 0);
 
+    // FPS Cap (number: 0=unlimited, 1-15)
+    snprintf(state_topic, sizeof(state_topic), "%s/fps_cap", base_topic);
+    snprintf(cmd_topic, sizeof(cmd_topic), "%s/fps_cap/set", base_topic);
+    publish_discovery("number", "fps_cap", "FPS Cap (0=unlimited)", NULL, "fps", cmd_topic, state_topic, 0, 15);
+
     // Reboot Button
     snprintf(cmd_topic, sizeof(cmd_topic), "%s/restart", base_topic);
     publish_discovery("button", "restart", "Restart Camera", "restart", NULL, cmd_topic, NULL, 0, 0);
@@ -238,6 +243,13 @@ static void handle_command(const char *topic_ptr, int topic_len, const char *dat
         if (s_led_cb) s_led_cb(level);
         snprintf(state_topic, sizeof(state_topic), "%s/led", base_topic);
         esp_mqtt_client_publish(client, state_topic, level ? "ON" : "OFF", 0, 0, 0);
+    } else if (strstr(topic, "fps_cap/set")) {
+        uint8_t cap = (val < 0 || val > 15) ? 0 : (uint8_t)val;
+        http_server_set_fps_cap(cap);
+        snprintf(state_topic, sizeof(state_topic), "%s/fps_cap", base_topic);
+        char cap_str[8];
+        snprintf(cap_str, sizeof(cap_str), "%u", cap);
+        esp_mqtt_client_publish(client, state_topic, cap_str, 0, 0, 1); // retain
     } else if (strstr(topic, "reprovision")) {
         ESP_LOGW(TAG, "Re-provisioning requested via MQTT");
         if (s_reprovision_cb) s_reprovision_cb();
@@ -394,6 +406,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         esp_mqtt_client_subscribe(client, cmd_sub, 1); // QoS 1 — same reasoning as OTA
 
         snprintf(cmd_sub, sizeof(cmd_sub), "%s/led/set", base_topic);
+        esp_mqtt_client_subscribe(client, cmd_sub, 0);
+
+        snprintf(cmd_sub, sizeof(cmd_sub), "%s/fps_cap/set", base_topic);
         esp_mqtt_client_subscribe(client, cmd_sub, 0);
 
         // Publish Initial State

@@ -57,6 +57,14 @@ static _Atomic uint32_t s_reinit_count = 0;     // camera_reinit() calls from br
 static _Atomic uint32_t s_frames_delivered = 0; // successful worker frame sends (all clients)
 static uint32_t s_broadcaster_hwm_words = 0;    // broadcaster stack HWM, updated every 100 frames
 
+/// FPS cap: 0 = unlimited, 1-15 = max frames/sec delivered to stream clients
+static _Atomic uint8_t s_fps_cap = 0;
+
+void http_server_set_fps_cap(uint8_t fps_cap) {
+    atomic_store(&s_fps_cap, fps_cap);
+    ESP_LOGI("http", "FPS cap set to %u (%s)", fps_cap, fps_cap ? "limited" : "unlimited");
+}
+
 uint32_t http_server_get_reinit_count(void) { return atomic_load(&s_reinit_count); }
 
 // Forward declaration - defined in main.c
@@ -267,7 +275,8 @@ static esp_err_t stats_handler(httpd_req_t *req)
             "\"broadcaster_words\":%lu,"
             "\"http_task_words\":%lu,"
             "\"worker_min_words\":%lu"
-        "}"
+        "},"
+        "\"fps_cap\":%u"
         "}",
         (long long)uptime_s,
         vsync_fps, broadcast_fps,
@@ -288,7 +297,8 @@ static esp_err_t stats_handler(httpd_req_t *req)
         (min_psram    == SIZE_MAX) ? cur_psram    : min_psram,
         (unsigned long)s_broadcaster_hwm_words,
         (unsigned long)http_task_hwm,
-        (unsigned long)worker_hwm_min);
+        (unsigned long)worker_hwm_min,
+        (unsigned)atomic_load(&s_fps_cap));
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -389,7 +399,24 @@ static void mjpeg_broadcaster_task(void *arg)
         }
 
         esp_camera_fb_return(fb);
-        // Remove vTaskDelay to allow pull-based pacing; broadcaster runs at camera speed
+
+        // FPS cap pacing — sleep the remainder of the frame interval after each delivery.
+        // CAMERA_GRAB_LATEST discards stale frames while we sleep, so next get() returns
+        // the freshest available frame. Reduces CPU and OPI bus load when clients need
+        // fewer fps than the camera's native ~9.4 fps.
+        {
+            static int64_t s_last_broadcast_us = 0;
+            uint8_t cap = atomic_load(&s_fps_cap);
+            if (cap > 0 && s_last_broadcast_us > 0) {
+                int64_t interval_us = 1000000LL / cap;
+                int64_t now = esp_timer_get_time();
+                int64_t wait_us = (s_last_broadcast_us + interval_us) - now;
+                if (wait_us > 2000) { // only sleep if > 2ms remaining
+                    vTaskDelay(pdMS_TO_TICKS(wait_us / 1000));
+                }
+            }
+            s_last_broadcast_us = esp_timer_get_time();
+        }
     }
 
 broadcaster_exit:
