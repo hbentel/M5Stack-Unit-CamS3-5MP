@@ -26,6 +26,13 @@ void mqtt_mgr_register_reprovision_callback(void (*cb)(void)) {
     s_reprovision_cb = cb;
 }
 
+// LED callback — registered by main.c; keeps esp_driver_gpio out of mqtt_mgr
+static void (*s_led_cb)(int level) = NULL;
+
+void mqtt_mgr_register_led_callback(void (*cb)(int level)) {
+    s_led_cb = cb;
+}
+
 static const char *TAG = "mqtt";
 
 static esp_mqtt_client_handle_t client = NULL;
@@ -163,6 +170,15 @@ static void send_ha_discovery(void)
     snprintf(state_topic, sizeof(state_topic), "%s/low_heap", base_topic);
     publish_discovery("binary_sensor", "low_heap", "Low Heap", "problem", NULL, NULL, state_topic, 0, 0);
 
+    // LED (light entity)
+    snprintf(state_topic, sizeof(state_topic), "%s/led", base_topic);
+    snprintf(cmd_topic, sizeof(cmd_topic), "%s/led/set", base_topic);
+    publish_discovery("light", "led", "Onboard LED", NULL, NULL, cmd_topic, state_topic, 0, 0);
+
+    // Min internal heap since boot (useful for detecting slow leaks over uptime)
+    snprintf(state_topic, sizeof(state_topic), "%s/heap_min", base_topic);
+    publish_discovery("sensor", "heap_min", "Heap Min (internal)", "data_size", "B", NULL, state_topic, 0, 0);
+
     // Reboot Button
     snprintf(cmd_topic, sizeof(cmd_topic), "%s/restart", base_topic);
     publish_discovery("button", "restart", "Restart Camera", "restart", NULL, cmd_topic, NULL, 0, 0);
@@ -217,6 +233,11 @@ static void handle_command(const char *topic_ptr, int topic_len, const char *dat
         url[url_len] = '\0';
         ESP_LOGI(TAG, "OTA URL received: %s", url);
         if (s_ota_cb) s_ota_cb(url);
+    } else if (strstr(topic, "led/set")) {
+        int level = (val != 0) ? 1 : 0;
+        if (s_led_cb) s_led_cb(level);
+        snprintf(state_topic, sizeof(state_topic), "%s/led", base_topic);
+        esp_mqtt_client_publish(client, state_topic, level ? "ON" : "OFF", 0, 0, 0);
     } else if (strstr(topic, "reprovision")) {
         ESP_LOGW(TAG, "Re-provisioning requested via MQTT");
         if (s_reprovision_cb) s_reprovision_cb();
@@ -241,6 +262,8 @@ static void mqtt_telemetry_task(void *arg)
     // For camera FPS calculation
     static uint32_t last_vsync = 0;
     static int64_t last_stats_time = 0;
+    // Min internal heap since boot
+    static size_t s_min_internal = SIZE_MAX;
 
     while (1) {
         esp_task_wdt_reset();
@@ -313,6 +336,7 @@ static void mqtt_telemetry_task(void *arg)
             // Low Heap alert (ON/OFF binary sensor — threshold 40 KB internal SRAM)
             #define LOW_HEAP_THRESHOLD_BYTES 40000
             size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            if (internal_free < s_min_internal) s_min_internal = internal_free;
             snprintf(topic, sizeof(topic), "%s/low_heap", base_topic);
             if (internal_free < LOW_HEAP_THRESHOLD_BYTES) {
                 ESP_LOGW(TAG, "Low internal heap: %zu bytes", internal_free);
@@ -320,6 +344,12 @@ static void mqtt_telemetry_task(void *arg)
             } else {
                 esp_mqtt_client_publish(client, topic, "OFF", 0, 0, 0);
             }
+
+            // Min internal heap since boot
+            snprintf(topic, sizeof(topic), "%s/heap_min", base_topic);
+            snprintf(payload, sizeof(payload), "%lu",
+                     (unsigned long)((s_min_internal == SIZE_MAX) ? internal_free : s_min_internal));
+            esp_mqtt_client_publish(client, topic, payload, 0, 0, 0);
         }
         vTaskDelay(pdMS_TO_TICKS(10000)); // Every 10 seconds
     }
@@ -362,6 +392,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
         snprintf(cmd_sub, sizeof(cmd_sub), "%s/reprovision", base_topic);
         esp_mqtt_client_subscribe(client, cmd_sub, 1); // QoS 1 — same reasoning as OTA
+
+        snprintf(cmd_sub, sizeof(cmd_sub), "%s/led/set", base_topic);
+        esp_mqtt_client_subscribe(client, cmd_sub, 0);
 
         // Publish Initial State
         char topic[128];

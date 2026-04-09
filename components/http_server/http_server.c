@@ -39,10 +39,12 @@ typedef struct {
     TaskHandle_t task;
     SemaphoreHandle_t sync_sem;
     bool active;
+    int slot; // Index into s_stream_clients — used to record per-slot HWM at exit
 } mjpeg_client_t;
 
 #define MAX_STREAM_CLIENTS 5
 static mjpeg_client_t s_stream_clients[MAX_STREAM_CLIENTS];
+static uint32_t s_worker_hwm_min_words[MAX_STREAM_CLIENTS] = {0}; // min HWM per slot (0 = not yet run)
 static SemaphoreHandle_t s_clients_mutex = NULL;
 
 static frame_buffer_t *s_broadcast_fb = NULL; // Current latest frame
@@ -189,6 +191,9 @@ static esp_err_t stats_handler(httpd_req_t *req)
     static int64_t last_time = 0;
     static float vsync_fps = 0;
     static float broadcast_fps = 0;
+    // Min heap since boot — updated on every /stats call
+    static size_t min_internal = SIZE_MAX;
+    static size_t min_psram = SIZE_MAX;
 
     cam_stats_t cam;
     wifi_stats_t wifi;
@@ -206,11 +211,30 @@ static esp_err_t stats_handler(httpd_req_t *req)
     last_broadcast_id = s_broadcast_frame_id;
     last_time = now;
 
-    // Stack HWM of the HTTP server task (this task, sampled live)
+    size_t cur_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t cur_psram    = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    if (cur_internal < min_internal) min_internal = cur_internal;
+    if (cur_psram    < min_psram)    min_psram    = cur_psram;
+
+    // Stack HWM: HTTP server task (live) and broadcaster (sampled every 100 frames)
     uint32_t http_task_hwm = uxTaskGetStackHighWaterMark(NULL);
 
-    char buf[1536];
-    int len = snprintf(buf, sizeof(buf),
+    // Worker HWM: minimum across all slots that have completed at least one session
+    uint32_t worker_hwm_min = 0;
+    for (int i = 0; i < MAX_STREAM_CLIENTS; i++) {
+        if (s_worker_hwm_min_words[i] > 0) {
+            if (worker_hwm_min == 0 || s_worker_hwm_min_words[i] < worker_hwm_min) {
+                worker_hwm_min = s_worker_hwm_min_words[i];
+            }
+        }
+    }
+
+    char *buf = heap_caps_malloc(1800, MALLOC_CAP_DEFAULT);
+    if (!buf) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    int len = snprintf(buf, 1800,
         "{"
         "\"uptime_s\":%lld,"
         "\"camera\":{"
@@ -222,6 +246,7 @@ static esp_err_t stats_handler(httpd_req_t *req)
             "\"no_eoi\":%lu,"
             "\"queue_overflow\":%lu,"
             "\"drops_no_buf\":%lu,"
+            "\"frames_via_recovery\":%lu,"
             "\"reinit_count\":%lu,"
             "\"active_streams\":%u,"
             "\"frames_delivered\":%lu,"
@@ -234,11 +259,14 @@ static esp_err_t stats_handler(httpd_req_t *req)
         "},"
         "\"memory\":{"
             "\"internal_free\":%zu,"
-            "\"psram_free\":%zu"
+            "\"psram_free\":%zu,"
+            "\"internal_min\":%zu,"
+            "\"psram_min\":%zu"
         "},"
         "\"stack_hwm\":{"
             "\"broadcaster_words\":%lu,"
-            "\"http_task_words\":%lu"
+            "\"http_task_words\":%lu,"
+            "\"worker_min_words\":%lu"
         "}"
         "}",
         (long long)uptime_s,
@@ -246,6 +274,7 @@ static esp_err_t stats_handler(httpd_req_t *req)
         (unsigned long)cam.vsync_isr_count, (unsigned long)cam.eof_count,
         (unsigned long)cam.no_soi_count, (unsigned long)cam.no_eoi_count,
         (unsigned long)cam.queue_overflow_count, (unsigned long)cam.drops_no_free_buf,
+        (unsigned long)cam.frames_via_recovery,
         (unsigned long)atomic_load(&s_reinit_count),
         http_server_get_active_streams(),
         (unsigned long)atomic_load(&s_frames_delivered),
@@ -254,14 +283,18 @@ static esp_err_t stats_handler(httpd_req_t *req)
         (unsigned long)cam.soi_offset_histogram[4], (unsigned long)cam.soi_offset_histogram[5],
         (unsigned long)cam.soi_offset_histogram[6], (unsigned long)cam.soi_offset_histogram[7],
         wifi.rssi, (unsigned long)wifi.disconnect_count, wifi.ip,
-        heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-        heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+        cur_internal, cur_psram,
+        (min_internal == SIZE_MAX) ? cur_internal : min_internal,
+        (min_psram    == SIZE_MAX) ? cur_psram    : min_psram,
         (unsigned long)s_broadcaster_hwm_words,
-        (unsigned long)http_task_hwm);
+        (unsigned long)http_task_hwm,
+        (unsigned long)worker_hwm_min);
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    return httpd_resp_send(req, buf, len);
+    esp_err_t ret = httpd_resp_send(req, buf, len);
+    free(buf);
+    return ret;
 }
 
 // ========================================
@@ -432,7 +465,17 @@ static void mjpeg_client_worker_task(void *arg)
         frame_count++;
     }
 
-    ESP_LOGI(TAG, "MJPEG worker for socket %d stopping (frames: %lu)", sockfd, frame_count);
+    // Record stack HWM for this slot before the task exits
+    uint32_t hwm = uxTaskGetStackHighWaterMark(NULL);
+    int my_slot = client->slot;
+    if (my_slot >= 0 && my_slot < MAX_STREAM_CLIENTS) {
+        if (s_worker_hwm_min_words[my_slot] == 0 || hwm < s_worker_hwm_min_words[my_slot]) {
+            s_worker_hwm_min_words[my_slot] = hwm;
+        }
+    }
+
+    ESP_LOGI(TAG, "MJPEG worker slot %d stopping (frames: %lu, hwm: %lu words)",
+             my_slot, (unsigned long)frame_count, (unsigned long)hwm);
 
     // Free the request (important for async)
     httpd_req_async_handler_complete(req);
@@ -490,6 +533,7 @@ static esp_err_t stream_handler(httpd_req_t *req)
 
     s_stream_clients[slot].req = copy;
     s_stream_clients[slot].active = true;
+    s_stream_clients[slot].slot = slot;
 
     char task_name[16];
     snprintf(task_name, sizeof(task_name), "mjpeg_cl_%d", slot);

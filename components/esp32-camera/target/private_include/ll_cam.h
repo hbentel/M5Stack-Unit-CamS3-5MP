@@ -160,8 +160,9 @@ typedef struct {
     volatile uint32_t cur_eof_cnt;       // ISR-side: chunks received for current frame
     volatile uint32_t isr_seq;           // debug monotonic counter
 
-    volatile uint32_t free_mask;         // bit i = frame i is free for capture
-    volatile uint32_t drops_no_free_buf; // debug: VSYNC with no free buffer
+    volatile uint32_t free_mask;           // bit i = frame i is free for capture
+    volatile uint32_t drops_no_free_buf;  // VSYNC ISR found free_mask==0, stalled
+    volatile uint32_t frames_via_recovery; // captures started by cam_give() recovery path
 } cam_obj_t;
 
 bool ll_cam_prepare_frame(cam_obj_t *cam, int frame_pos);

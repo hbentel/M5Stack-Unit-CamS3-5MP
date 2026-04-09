@@ -168,6 +168,7 @@ static void cam_reset_and_free_frame(int frame_pos)
     // restart the hardware from task context: claim this buffer, reset DMA,
     // and re-arm cam_start=1 so VSYNC interrupts resume.
     if (old == 0 && cam_obj->psram_mode && cam_obj->jpeg_mode) {
+        cam_obj->frames_via_recovery++;
         __atomic_fetch_and(&cam_obj->free_mask, ~(1u << frame_pos), __ATOMIC_SEQ_CST);
         cam_obj->cur_frame_pos = (uint8_t)frame_pos;
         cam_obj->cur_eof_cnt = 0;
@@ -604,6 +605,7 @@ esp_err_t cam_config(const camera_config_t *config, framesize_t frame_size, uint
     cam_obj->cur_eof_cnt = 0;
     cam_obj->isr_seq = 0;
     cam_obj->drops_no_free_buf = 0;
+    cam_obj->frames_via_recovery = 0;
     cam_obj->capturing = false;
 
 #if CONFIG_CAMERA_CORE1
@@ -791,6 +793,7 @@ esp_err_t esp_camera_get_stats(cam_stats_t *stats)
     stats->psram_cache_msync_count = cam_obj->debug.psram_cache_msync_count;
     stats->partial_chunk_bytes = cam_obj->debug.partial_chunk_bytes;
     stats->drops_no_free_buf = cam_obj->drops_no_free_buf;
+    stats->frames_via_recovery = cam_obj->frames_via_recovery;
     for(int i=0; i<8; i++) stats->soi_offset_histogram[i] = cam_obj->debug.soi_offset_histogram[i];
     return ESP_OK;
 }

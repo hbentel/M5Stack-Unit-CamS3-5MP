@@ -153,9 +153,9 @@ esp_err_t wifi_init_sta(void)
     ESP_ERROR_CHECK(network_prov_mgr_init(prov_config));
 
     if (reprovision) {
-        // Erases the "provisioned" flag in NVS so is_provisioned() returns false below.
-        // NVS write is safe here: camera DMA has not started yet.
-        network_prov_mgr_reset_provisioning();
+        // IDF v6 equivalent of wifi_prov_mgr_reset_provisioning() — clears stored SSID/password
+        // via esp_wifi_restore() internally. NVS write is safe here: camera DMA not yet started.
+        network_prov_mgr_reset_wifi_provisioning();
         ESP_LOGW(TAG, "Wi-Fi credentials cleared — entering BLE provisioning");
     }
 

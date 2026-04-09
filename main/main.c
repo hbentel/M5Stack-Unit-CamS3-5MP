@@ -124,6 +124,12 @@ static void apply_camera_settings(void)
 
 SemaphoreHandle_t g_camera_reinit_mutex = NULL;
 
+// LED wrapper — passed to mqtt_mgr as a callback so mqtt_mgr doesn't need esp_driver_gpio
+static void led_set_level(int level)
+{
+    gpio_set_level(14, level);
+}
+
 esp_err_t camera_reinit(void)
 {
     if (!g_camera_reinit_mutex) {
@@ -187,6 +193,17 @@ void app_main(void)
 
     log_buf_init(); // Start capturing logs to PSRAM ring buffer (non-fatal if PSRAM unavailable)
 
+    // GPIO 14 — onboard LED, active high, controlled via MQTT unitcams3/led/set
+    gpio_config_t led_cfg = {
+        .pin_bit_mask = (1ULL << 14),
+        .mode         = GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&led_cfg);
+    gpio_set_level(14, 0); // LED off at boot
+
     ESP_LOGI(TAG, "--- Initializing Frame Pool ---");
     // 8 buffers x 512KB = 4.0MB fixed PSRAM usage
     // Sized to support up to UXGA (1600x1200) high-quality JPEGs
@@ -242,6 +259,7 @@ void app_main(void)
             ESP_LOGE(TAG, "MQTT Init Failed! Continuing...");
         }
         mqtt_mgr_register_reprovision_callback(wifi_start_reprovision);
+        mqtt_mgr_register_led_callback(led_set_level);
     } else {
         ESP_LOGI(TAG, "MQTT disabled by config — skipping");
     }

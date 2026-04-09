@@ -44,6 +44,13 @@ void mqtt_mgr_register_ota_callback(esp_err_t (*cb)(const char *url));
  */
 void mqtt_mgr_register_reprovision_callback(void (*cb)(void));
 
+/**
+ * @brief Register a callback for LED on/off commands received via MQTT.
+ *        Called by main.c after mqtt_mgr_start(). The callback receives 0 (off) or 1 (on).
+ *        Keeps GPIO access in main.c, avoiding esp_driver_gpio dependency in mqtt_mgr.
+ */
+void mqtt_mgr_register_led_callback(void (*cb)(int level));
+
 #ifdef __cplusplus
 }
 #endif

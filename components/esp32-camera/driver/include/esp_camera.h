@@ -263,7 +263,8 @@ typedef struct {
     uint32_t psram_cache_msync_count;
     uint32_t partial_chunk_bytes;
     uint32_t soi_offset_histogram[8];
-    uint32_t drops_no_free_buf;
+    uint32_t drops_no_free_buf;   // VSYNC ISR found no free buffer (capture stalled)
+    uint32_t frames_via_recovery; // frames restarted by cam_give() recovery path
 } cam_stats_t;
 
 esp_err_t esp_camera_get_stats(cam_stats_t *stats);
