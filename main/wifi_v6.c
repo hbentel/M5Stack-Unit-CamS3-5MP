@@ -16,11 +16,27 @@
 #include "freertos/event_groups.h"
 #include <network_provisioning/manager.h>
 #include <network_provisioning/scheme_ble.h>
+#include "esp_attr.h"
+#include "recovery_mgr.h"
 
 static const char *TAG = "wifi";
 static uint32_t s_disconnect_count = 0;
 static char s_ip_addr[16] = {0};
 static volatile bool s_provisioning_active = false;
+
+// ========================================
+// Re-provisioning via RTC_NOINIT (same pattern as OTA URL)
+// ========================================
+RTC_NOINIT_ATTR static uint32_t s_reprovision_magic;
+#define REPROVISION_MAGIC 0xDEADB0B0U
+
+void wifi_start_reprovision(void)
+{
+    s_reprovision_magic = REPROVISION_MAGIC;
+    recovery_mgr_signal_planned_reboot(); // Prevents boot-loop counter from tripping
+    ESP_LOGW(TAG, "Reprovision requested — rebooting into BLE provisioning...");
+    esp_restart();
+}
 
 static EventGroupHandle_t wifi_event_group;
 #define WIFI_CONNECTED_BIT BIT0
@@ -60,8 +76,10 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         }
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         if (!s_provisioning_active) {
+            wifi_event_sta_disconnected_t *evt = (wifi_event_sta_disconnected_t *)event_data;
             s_disconnect_count++;
-            ESP_LOGW(TAG, "Disconnected. Retrying...");
+            ESP_LOGW(TAG, "Disconnected (reason: %d). Retrying in 1s...", evt->reason);
+            vTaskDelay(pdMS_TO_TICKS(1000));
             esp_wifi_connect();
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
@@ -69,6 +87,11 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         snprintf(s_ip_addr, sizeof(s_ip_addr), IPSTR, IP2STR(&event->ip_info.ip));
         ESP_LOGI(TAG, "Got IP: %s", s_ip_addr);
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_LOST_IP) {
+        ESP_LOGW(TAG, "Lost IP address — triggering reconnect");
+        memset(s_ip_addr, 0, sizeof(s_ip_addr));
+        esp_wifi_disconnect();
+        esp_wifi_connect();
     }
 }
 
@@ -86,6 +109,14 @@ void wifi_get_stats(wifi_stats_t *stats)
 
 esp_err_t wifi_init_sta(void)
 {
+    // Check for reprovision request written by wifi_start_reprovision() on the previous boot.
+    // The magic survives esp_restart() via RTC_NOINIT_ATTR (no-load section, bootloader skips it).
+    bool reprovision = (s_reprovision_magic == REPROVISION_MAGIC);
+    if (reprovision) {
+        s_reprovision_magic = 0; // Clear before any potential crash
+        ESP_LOGW(TAG, "Reprovision magic detected — will clear Wi-Fi credentials");
+    }
+
     // NVS is required by Wi-Fi driver and provisioning manager
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -109,6 +140,8 @@ esp_err_t wifi_init_sta(void)
                                                         &event_handler, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
                                                         &event_handler, NULL, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_LOST_IP,
+                                                        &event_handler, NULL, NULL));
 
     // Init provisioning manager with NimBLE scheme.
     // NETWORK_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BLE releases BLE memory after provisioning,
@@ -118,6 +151,13 @@ esp_err_t wifi_init_sta(void)
         .scheme_event_handler = NETWORK_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BLE,
     };
     ESP_ERROR_CHECK(network_prov_mgr_init(prov_config));
+
+    if (reprovision) {
+        // Erases the "provisioned" flag in NVS so is_provisioned() returns false below.
+        // NVS write is safe here: camera DMA has not started yet.
+        network_prov_mgr_reset_provisioning();
+        ESP_LOGW(TAG, "Wi-Fi credentials cleared — entering BLE provisioning");
+    }
 
     bool provisioned = false;
     ESP_ERROR_CHECK(network_prov_mgr_is_wifi_provisioned(&provisioned));
@@ -138,8 +178,9 @@ esp_err_t wifi_init_sta(void)
         // STA_START event fires → event_handler calls esp_wifi_connect()
     }
 
-    // Cap TX power to prevent brownouts; disable power save for stable XCLK
-    esp_wifi_set_max_tx_power(32);
+    // Disable power save for stable XCLK timing; full TX power for reliable uplink.
+    // Do NOT cap TX power with esp_wifi_set_max_tx_power() — 8 dBm cap was the
+    // root cause of 105 Wi-Fi disconnects (16× reduction in uplink power).
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 
     ESP_LOGI(TAG, "Waiting for IP address...");

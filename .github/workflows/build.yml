@@ -44,9 +44,11 @@ jobs:
       # Creates a signed SLSA statement on GitHub's transparency log.
       # Verify with: gh attestation verify unitcams3_merged.bin --repo hbentel/M5Stack-Unit-CamS3-5MP
       # Attestation requires a public repo or GitHub Advanced Security.
-      # continue-on-error so the build stays green on private forks.
+      # continue-on-error so the build stays green on private forks or forks
+      # without the id-token:write permission.
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
+        id: attest
         continue-on-error: true
         with:
           subject-path: unitcams3_merged.bin
