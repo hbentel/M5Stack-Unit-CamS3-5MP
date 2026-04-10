@@ -169,17 +169,23 @@ canaries + URL length) guards against stale state from panics.
 ### OTA flow
 
 ```
-MQTT unitcams3/ota/set received
-    → ota_mgr_start_url(): write URL to RTC_NOINIT_ATTR (pure SRAM, no flash)
+MQTT unitcams3/ota/set received (JSON payload)
+    → Token verified against config_mgr_get_ota_token() (if configured)
+    → SHA-256 hex and URL extracted from JSON
+    → ota_mgr_start_url(url, sha256_hex): write URL + hash to RTC_NOINIT_ATTR (pure SRAM, no flash)
     → recovery_mgr_signal_planned_reboot() (prevents boot-loop false positive)
     → esp_restart()
 
 Next boot:
     → ota_mgr_run_pending() called BEFORE esp_camera_init()
-    → Three-field integrity check passes → URL present
+    → Three-field integrity check passes → URL and hash copied to local stack buffers
     → RTC RAM cleared (failure will not cause boot loop)
+    → Download full firmware to PSRAM buffer (fw_buf, up to 4 MB)
     → Validate magic byte 0xE9 on first chunk (reject 404 HTML, captive portals)
-    → esp_ota_begin() → flash loop → content_length check → esp_ota_end()
+    → SHA-256 of fw_buf verified against saved hash (if provided) — abort if mismatch
+    → content_length == downloaded size check
+    → Wi-Fi stopped (no ISRs during flash)
+    → esp_ota_begin() → flash loop (4 KB internal SRAM staging buffer) → esp_ota_end()
     → esp_ota_set_boot_partition() → esp_restart()
 
 Two minutes after clean boot:

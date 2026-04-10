@@ -47,7 +47,7 @@ The device IP is printed to the serial monitor on boot and is shown on the `/set
   automatic Watchdog recovery (30s timeout)
 - **Home Assistant auto-discovery** — sensor, number, and button entities on connect
 - **Camera image controls** via MQTT — brightness, contrast, saturation, white balance
-- **URL-based OTA** — publish firmware URL to MQTT; device flashes and reboots
+- **URL-based OTA** — publish firmware URL to MQTT; optional token auth and SHA-256 integrity verification before flashing
 - **Recovery manager** — NVS boot-loop detection, 2-minute health timer, OTA rollback
 - **Core dump to flash** — download crash dumps via `GET /api/coredump`
 - **Web log viewer** — `GET /api/logs` returns the full boot and runtime log from a 16 KB PSRAM ring buffer
@@ -212,6 +212,8 @@ http://<device-ip>/setup
 | MQTT Username | Leave blank if broker has no auth | _(empty)_ |
 | MQTT Password | Leave blank if broker has no auth | _(empty)_ |
 | Device ID | MQTT topic prefix, HA entity prefix, and mDNS hostname (`<id>.local`) | `unitcams3` |
+| OTA Token | If set, MQTT `ota/set` requires JSON `{"url":"...","token":"<this>"}` | _(empty — auth disabled)_ |
+| Coredump Token | If set, `GET /api/coredump` requires `Authorization: Bearer <this>` | _(empty — auth disabled)_ |
 | Enable MQTT | Toggle MQTT on/off | enabled |
 | Camera Resolution | QVGA / VGA / HD / UXGA | VGA (640×480) |
 | JPEG Quality | 1 (best) – 63 (lowest) | 12 |
@@ -341,8 +343,11 @@ All topics use the **Device ID** as a prefix (default: `unitcams3`).
 | `unitcams3/contrast/set` | `0` to `6` | Set sensor contrast |
 | `unitcams3/saturation/set` | `0` to `6` | Set sensor saturation |
 | `unitcams3/wb_mode/set` | `0`–`4` | White balance (0=Auto, 1=Sun, 2=Cloud, 3=Office, 4=Home) |
+| `unitcams3/fps_cap/set` | `0`–`15` | Broadcaster FPS cap (0 = unlimited); not persisted |
+| `unitcams3/led/set` | `1` / `0` | LED on / off |
 | `unitcams3/restart` | _(any)_ | Trigger `esp_restart()` |
-| `unitcams3/ota/set` | URL string | Trigger OTA update |
+| `unitcams3/reprovision` | _(any)_ | Wipe Wi-Fi credentials and reboot into BLE provisioning |
+| `unitcams3/ota/set` | JSON (see OTA section) | Trigger OTA update |
 
 ---
 
@@ -355,7 +360,7 @@ All topics use the **Device ID** as a prefix (default: `unitcams3`).
 | 80 | `POST /setup` | Save configuration and reboot |
 | 80 | `GET /health` | JSON: uptime, heap, PSRAM, JPEG drops, `app_sha256`, `reset_reason` |
 | 80 | `GET /stats` | JSON: camera FPS counters, Wi-Fi RSSI, memory |
-| 80 | `GET /api/coredump` | Download last crash dump (ELF format) |
+| 80 | `GET /api/coredump` | Download last crash dump (ELF format); requires `Authorization: Bearer <token>` if Coredump Token is configured |
 | 80 | `GET /api/logs` | Full boot + runtime log as plain text (16 KB PSRAM ring buffer) |
 | 81 | `GET /stream` | MJPEG stream (used by Frigate) |
 
@@ -386,19 +391,31 @@ cd build && python3 -m http.server 8080
 
 ### Trigger OTA via MQTT
 
+**Without a token configured** (default — open):
 ```bash
 mosquitto_pub -h <broker-ip> -q 1 \
   -t unitcams3/ota/set \
   -m "http://<your-ip>:8080/unitcams3_firmware.bin"
 ```
 
+**With a token configured** (recommended):
+```bash
+SHA=$(shasum -a 256 build/unitcams3_firmware.bin | cut -c1-64)
+mosquitto_pub -h <broker-ip> -q 1 \
+  -t unitcams3/ota/set \
+  -m "{\"url\":\"http://<your-ip>:8080/unitcams3_firmware.bin\",\"token\":\"<your-token>\",\"sha256\":\"$SHA\"}"
+```
+
 Use `-q 1` (QoS 1) so the broker retries delivery if the device briefly
 disconnects at the moment of publish. QoS 0 messages are silently lost on reconnect.
 
-The device saves the URL to RTC RAM (a plain SRAM write — safe while camera DMA
+The `sha256` field is optional but recommended — the device verifies the full firmware
+image against it before writing to flash, catching truncated downloads or MITM attempts.
+
+The device saves the URL and hash to RTC RAM (plain SRAM writes — safe while camera DMA
 is running), publishes `unitcams3/ota_status: pending_reboot`, then reboots.
-On the next boot, OTA runs *before* the camera initializes. If the download
-fails the device returns to normal operation; retrigger via MQTT when back online.
+On the next boot, OTA runs *before* the camera initializes. If the download or
+verification fails, the device returns to normal operation; retrigger via MQTT.
 
 ### Verify the flash succeeded
 

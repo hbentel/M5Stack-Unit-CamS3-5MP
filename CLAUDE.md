@@ -104,8 +104,11 @@ Base topic: `unitcams3`
 | `unitcams3/fps`, `/no_soi`, `/jpeg_drops`, `/recovery_count`, `/streams` | publish | Camera health/stats every 10s |
 | `unitcams3/ota_status` | publish | `idle` / `pending_reboot` |
 | `unitcams3/brightness/set`, `/contrast/set`, `/saturation/set`, `/wb_mode/set` | subscribe | Camera image controls |
+| `unitcams3/fps_cap/set` | subscribe | FPS cap (0=unlimited, 1–15); not persisted across reboot |
+| `unitcams3/led/set` | subscribe | LED on/off (`1`/`0`) |
 | `unitcams3/restart` | subscribe | Triggers `esp_restart()` |
-| `unitcams3/ota/set` | subscribe | URL string → triggers URL-based OTA |
+| `unitcams3/reprovision` | subscribe | Wipes Wi-Fi credentials and reboots into BLE provisioning |
+| `unitcams3/ota/set` | subscribe | JSON `{"url":"...","token":"...","sha256":"..."}` → triggers URL-based OTA (token required if configured; sha256 optional) |
 
 ### OTA Flow (RTC RAM + Reboot Architecture)
 
@@ -114,18 +117,20 @@ Base topic: `unitcams3`
 **Why RTC RAM?** `RTC_NOINIT_ATTR` places data in `.rtc_noinit` — a `(NOLOAD)` section with no flash image. The bootloader skips it on every reset, so values survive `esp_restart()`. **Do not use `RTC_DATA_ATTR` for this** — the bootloader re-copies `.rtc.data` from flash on every non-deep-sleep reset, overwriting values written before the reboot. `RTC_DATA_ATTR` is for deep-sleep persistence only.
 
 **OTA flow:**
-1. MQTT `unitcams3/ota/set` received → `ota_mgr_start_url()` writes URL to RTC RAM (pure SRAM, no flash) → `esp_restart()`
+1. MQTT `unitcams3/ota/set` received with JSON payload — token verified if configured, SHA-256 extracted if provided → `ota_mgr_start_url()` writes URL + hash to RTC RAM (pure SRAM, no flash) → `esp_restart()`
 2. Next boot: `ota_mgr_run_pending()` called from `main.c` after Wi-Fi, **before** `esp_camera_init()`
-3. If URL found in RTC RAM (integrity check passes): validates magic byte (0xE9), downloads firmware, validates content_length, flashes, reboots
+3. If URL found in RTC RAM (integrity check passes): validates magic byte (0xE9), downloads full firmware to PSRAM buffer, verifies SHA-256 (if provided), validates content_length, flashes, reboots
 4. If OTA fails: RTC RAM cleared (no boot loop), normal boot continues — retrigger via MQTT
 5. On success: reboots into new firmware; `recovery_mgr` marks healthy after 2 min via `esp_ota_mark_app_valid_cancel_rollback()`
 
 **Protections:**
+- Token auth: if `CONFIG_UNITCAMS3_OTA_TOKEN` is set (or configured via `/setup`), the MQTT payload must be JSON `{"url":"...","token":"<token>"}` — bare URL strings are rejected
 - Magic byte 0xE9 checked on first chunk before erasing target partition (rejects HTML 404 pages, captive portals)
+- SHA-256 verified against full PSRAM buffer before any flash write — if provided in `{"sha256":"<64-hex-chars>"}` field
 - `image_len == content_length` verified before `esp_ota_end()` (rejects truncated downloads)
 - RTC RAM cleared before attempting OTA (crashed mid-flash does not cause boot loop)
 - Two 32-bit canary values + URL length field guard against stale RTC state from previous panics
-- 4KB download buffer is `heap_caps_malloc(MALLOC_CAP_INTERNAL)` — PSRAM cache disabled during flash writes
+- 4KB flash staging buffer is `heap_caps_malloc(MALLOC_CAP_INTERNAL)` — PSRAM cache disabled during flash writes
 
 **Verify OTA flashed the correct firmware:**
 ```bash

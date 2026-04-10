@@ -17,17 +17,18 @@ extern "C" {
 esp_err_t ota_mgr_init(void);
 
 /**
- * @brief Save OTA URL to NVS and reboot immediately.
+ * @brief Save OTA URL and optional SHA-256 to RTC RAM and reboot immediately.
  *
  * Called from MQTT on receipt of unitcams3/ota/set.
- * Saves the URL to NVS, then calls esp_restart().
+ * Saves the URL and hash to RTC RAM, then calls esp_restart().
  * On the next boot, ota_mgr_run_pending() picks up the URL and
  * runs the OTA before the camera is ever initialized.
  *
  * @param url HTTP URL pointing to the firmware binary
+ * @param sha256_hex 64-char hex string of the binary's SHA-256 (optional, may be NULL)
  * @return Does not return on success (reboots). Returns error code on failure.
  */
-esp_err_t ota_mgr_start_url(const char *url);
+esp_err_t ota_mgr_start_url(const char *url, const char *sha256_hex);
 
 /**
  * @brief Check NVS for a pending OTA URL and run it if found.

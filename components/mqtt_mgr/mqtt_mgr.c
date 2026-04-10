@@ -11,11 +11,12 @@
 #include "jpeg_validate.h"
 #include "recovery_mgr.h"
 #include "http_server.h"
+#include "config_mgr.h"
 
 // OTA callback — registered by ota_mgr_init() to break circular link dependency
-static esp_err_t (*s_ota_cb)(const char *url) = NULL;
+static esp_err_t (*s_ota_cb)(const char *url, const char *sha256_hex) = NULL;
 
-void mqtt_mgr_register_ota_callback(esp_err_t (*cb)(const char *url)) {
+void mqtt_mgr_register_ota_callback(esp_err_t (*cb)(const char *url, const char *sha256_hex)) {
     s_ota_cb = cb;
 }
 
@@ -232,12 +233,67 @@ static void handle_command(const char *topic_ptr, int topic_len, const char *dat
         snprintf(state_topic, sizeof(state_topic), "%s/wb_mode", base_topic);
         esp_mqtt_client_publish(client, state_topic, val_str, 0, 0, 0);
     } else if (strstr(topic, "ota/set")) {
-        char url[256];
-        int url_len = (orig_data_len < (int)sizeof(url) - 1) ? orig_data_len : (int)sizeof(url) - 1;
-        memcpy(url, data, url_len);
-        url[url_len] = '\0';
-        ESP_LOGI(TAG, "OTA URL received: %s", url);
-        if (s_ota_cb) s_ota_cb(url);
+        char raw[300];
+        int raw_len = (orig_data_len < (int)sizeof(raw) - 1) ? orig_data_len : (int)sizeof(raw) - 1;
+        memcpy(raw, data, raw_len);
+        raw[raw_len] = '\0';
+
+        const char *expected_token = config_mgr_get_ota_token();
+        char url[256] = {0};
+        char sha256_hex[65] = {0};
+
+        if (expected_token && expected_token[0] != '\0') {
+            // Token auth required — parse JSON {"url":"...","token":"...",["sha256":"..."]}
+            cJSON *root = cJSON_ParseWithLength(raw, raw_len);
+            if (!root) {
+                ESP_LOGW(TAG, "OTA: payload is not valid JSON — rejecting");
+                return;
+            }
+            cJSON *j_url   = cJSON_GetObjectItem(root, "url");
+            cJSON *j_token = cJSON_GetObjectItem(root, "token");
+            cJSON *j_sha   = cJSON_GetObjectItem(root, "sha256");
+
+            if (!cJSON_IsString(j_url) || !cJSON_IsString(j_token)) {
+                ESP_LOGW(TAG, "OTA: missing url or token field — rejecting");
+                cJSON_Delete(root);
+                return;
+            }
+            if (strcmp(j_token->valuestring, expected_token) != 0) {
+                ESP_LOGW(TAG, "OTA: token mismatch — rejecting");
+                cJSON_Delete(root);
+                return;
+            }
+            strlcpy(url, j_url->valuestring, sizeof(url));
+            if (cJSON_IsString(j_sha) && strlen(j_sha->valuestring) == 64) {
+                strlcpy(sha256_hex, j_sha->valuestring, sizeof(sha256_hex));
+            }
+            cJSON_Delete(root);
+        } else {
+            // No token configured — check if it's JSON anyway (to support SHA-256 in legacy mode)
+            if (raw[0] == '{') {
+                cJSON *json_root = cJSON_ParseWithLength(raw, raw_len);
+                if (json_root) {
+                    cJSON *j_url = cJSON_GetObjectItem(json_root, "url");
+                    cJSON *j_sha = cJSON_GetObjectItem(json_root, "sha256");
+                    if (cJSON_IsString(j_url)) {
+                        strlcpy(url, j_url->valuestring, sizeof(url));
+                        if (cJSON_IsString(j_sha) && strlen(j_sha->valuestring) == 64) {
+                            strlcpy(sha256_hex, j_sha->valuestring, sizeof(sha256_hex));
+                        }
+                    }
+                    cJSON_Delete(json_root);
+                }
+            }
+            
+            // If still no URL, it's a bare URL string
+            if (url[0] == '\0') {
+                strlcpy(url, raw, sizeof(url));
+            }
+        }
+
+        if (url[0] == '\0') return;
+        ESP_LOGI(TAG, "OTA URL accepted: %s", url);
+        if (s_ota_cb) s_ota_cb(url, sha256_hex[0] ? sha256_hex : NULL);
     } else if (strstr(topic, "led/set")) {
         int level = (val != 0) ? 1 : 0;
         if (s_led_cb) s_led_cb(level);

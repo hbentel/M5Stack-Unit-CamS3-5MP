@@ -16,12 +16,16 @@ static const char *TAG = "config_mgr";
 #define KEY_MQTT_EN    "mqtt_en"
 #define KEY_CAM_RES    "cam_res"
 #define KEY_JPEG_QUAL  "jpeg_qual"
+#define KEY_OTA_TOKEN  "ota_token"
+#define KEY_CD_TOKEN   "cd_token"
 
 /* Field size limits (including null terminator) */
 #define MQTT_URL_MAX   128
 #define MQTT_USER_MAX  64
 #define MQTT_PASS_MAX  64
 #define DEVICE_ID_MAX  32
+#define OTA_TOKEN_MAX  64
+#define CD_TOKEN_MAX   64
 
 /* Default framesize: FRAMESIZE_VGA = 10 */
 #define DEFAULT_CAM_RES   10
@@ -32,6 +36,8 @@ static char s_mqtt_url[MQTT_URL_MAX];
 static char s_mqtt_user[MQTT_USER_MAX];
 static char s_mqtt_pass[MQTT_PASS_MAX];
 static char s_device_id[DEVICE_ID_MAX];
+static char s_ota_token[OTA_TOKEN_MAX];
+static char s_cd_token[CD_TOKEN_MAX];
 static bool    s_mqtt_en;
 static uint8_t s_cam_res;
 static uint8_t s_jpeg_qual;
@@ -81,11 +87,15 @@ esp_err_t config_mgr_init(void)
         load_str(nh, KEY_MQTT_USER, s_mqtt_user, sizeof(s_mqtt_user), CONFIG_UNITCAMS3_MQTT_USER);
         load_str(nh, KEY_MQTT_PASS, s_mqtt_pass, sizeof(s_mqtt_pass), CONFIG_UNITCAMS3_MQTT_PASS);
         load_str(nh, KEY_DEVICE_ID, s_device_id, sizeof(s_device_id), CONFIG_UNITCAMS3_DEVICE_ID);
+        load_str(nh, KEY_OTA_TOKEN, s_ota_token, sizeof(s_ota_token), CONFIG_UNITCAMS3_OTA_TOKEN);
+        load_str(nh, KEY_CD_TOKEN,  s_cd_token,  sizeof(s_cd_token),  CONFIG_UNITCAMS3_COREDUMP_TOKEN);
     } else {
         strlcpy(s_mqtt_url,  CONFIG_UNITCAMS3_MQTT_BROKER_URL, sizeof(s_mqtt_url));
         strlcpy(s_mqtt_user, CONFIG_UNITCAMS3_MQTT_USER,       sizeof(s_mqtt_user));
         strlcpy(s_mqtt_pass, CONFIG_UNITCAMS3_MQTT_PASS,       sizeof(s_mqtt_pass));
         strlcpy(s_device_id, CONFIG_UNITCAMS3_DEVICE_ID,       sizeof(s_device_id));
+        strlcpy(s_ota_token, CONFIG_UNITCAMS3_OTA_TOKEN,       sizeof(s_ota_token));
+        strlcpy(s_cd_token,  CONFIG_UNITCAMS3_COREDUMP_TOKEN,  sizeof(s_cd_token));
         s_mqtt_en  = true;
         s_cam_res  = DEFAULT_CAM_RES;
         s_jpeg_qual = DEFAULT_JPEG_QUAL;
@@ -133,6 +143,8 @@ const char *config_mgr_get_device_id(void)     { return s_device_id; }
 bool        config_mgr_is_mqtt_enabled(void)   { return s_mqtt_en; }
 uint8_t     config_mgr_get_cam_resolution(void){ return s_cam_res; }
 uint8_t     config_mgr_get_jpeg_quality(void)  { return s_jpeg_qual; }
+const char *config_mgr_get_ota_token(void)     { return s_ota_token; }
+const char *config_mgr_get_coredump_token(void) { return s_cd_token; }
 
 /* --- Setters (update in-memory only) --- */
 
@@ -143,6 +155,8 @@ void config_mgr_set_device_id(const char *v)     { strlcpy(s_device_id, v, sizeo
 void config_mgr_set_mqtt_enabled(bool v)         { s_mqtt_en = v; }
 void config_mgr_set_cam_resolution(uint8_t v)    { s_cam_res = v; }
 void config_mgr_set_jpeg_quality(uint8_t v)      { s_jpeg_qual = v; }
+void config_mgr_set_ota_token(const char *v)     { strlcpy(s_ota_token, v, sizeof(s_ota_token)); }
+void config_mgr_set_coredump_token(const char *v) { strlcpy(s_cd_token,  v, sizeof(s_cd_token)); }
 
 /* --- Persist to NVS --- */
 
@@ -164,6 +178,8 @@ esp_err_t config_mgr_save(void)
     nvs_set_str(h, KEY_MQTT_USER, s_mqtt_user);
     nvs_set_str(h, KEY_MQTT_PASS, s_mqtt_pass);
     nvs_set_str(h, KEY_DEVICE_ID, s_device_id);
+    nvs_set_str(h, KEY_OTA_TOKEN, s_ota_token);
+    nvs_set_str(h, KEY_CD_TOKEN,  s_cd_token);
     nvs_set_u8(h,  KEY_MQTT_EN,   s_mqtt_en ? 1 : 0);
     nvs_set_u8(h,  KEY_CAM_RES,   s_cam_res);
     nvs_set_u8(h,  KEY_JPEG_QUAL, s_jpeg_qual);

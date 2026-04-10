@@ -56,6 +56,7 @@ static RTC_NOINIT_ATTR uint32_t s_magic_a;
 static RTC_NOINIT_ATTR uint32_t s_magic_b;
 static RTC_NOINIT_ATTR uint32_t s_url_len;
 static RTC_NOINIT_ATTR char     s_url[256];
+static RTC_NOINIT_ATTR char     s_expected_sha256[65];
 
 static bool rtc_has_pending_url(void)
 {
@@ -66,12 +67,20 @@ static bool rtc_has_pending_url(void)
             strnlen(s_url, sizeof(s_url)) == s_url_len);
 }
 
-static void rtc_save_url(const char *url)
+static void rtc_save_url(const char *url, const char *sha256_hex)
 {
     size_t len = strlen(url);
     strncpy(s_url, url, sizeof(s_url) - 1);
     s_url[sizeof(s_url) - 1] = '\0';
     s_url_len = (uint32_t)len;
+    
+    if (sha256_hex) {
+        strncpy(s_expected_sha256, sha256_hex, sizeof(s_expected_sha256) - 1);
+        s_expected_sha256[sizeof(s_expected_sha256) - 1] = '\0';
+    } else {
+        s_expected_sha256[0] = '\0';
+    }
+    
     s_magic_a = OTA_MAGIC_A;
     s_magic_b = OTA_MAGIC_B;
 }
@@ -82,33 +91,38 @@ static void rtc_clear_url(void)
     s_magic_b = 0;
     s_url_len = 0;
     memset(s_url, 0, sizeof(s_url));
+    memset(s_expected_sha256, 0, sizeof(s_expected_sha256));
 }
 
 // ========================================
 // Core OTA: download-to-PSRAM → stop-wifi → flash
-//
-// WHY this two-phase approach:
-// esp_ota_begin/write disable the OPI PSRAM cache for the duration of each
-// flash erase/write operation. On IDF v6, Wi-Fi ISRs are marked
-// ESP_INTR_FLAG_IRAM (so they survive esp_intr_noniram_disable) but their
-// handlers call into lwIP code which is in flash-cached memory. If a Wi-Fi
-// or TCP receive ISR fires during the cache-disable window it crashes with
-// ExcCause=7 → double exception.
-//
-// Fix: download the complete firmware into a PSRAM buffer first (no flash
-// writes during download), close the HTTP connection, stop Wi-Fi (removes
-// all active ISRs), then flash using a 4KB internal-SRAM staging buffer.
-// During esp_ota_write(), the only memory accessed is internal SRAM — no
-// PSRAM, no flash-cached code, no Wi-Fi ISRs → safe on both v5 and v6.
-//
-// Precondition: camera is NOT running (OTA runs before esp_camera_init()).
 // ========================================
+
+#include "mbedtls/sha256.h"
+
+// Compute SHA-256 of buf[0..len-1], write 32 bytes to digest[].
+static esp_err_t sha256_buffer(const uint8_t *buf, size_t len, uint8_t digest[32])
+{
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init(&ctx);
+    int ret = mbedtls_sha256_starts(&ctx, 0); // 0 = SHA-256 (not SHA-224)
+    if (ret != 0) goto fail;
+    ret = mbedtls_sha256_update(&ctx, buf, len);
+    if (ret != 0) goto fail;
+    ret = mbedtls_sha256_finish(&ctx, digest);
+    if (ret != 0) goto fail;
+    mbedtls_sha256_free(&ctx);
+    return ESP_OK;
+fail:
+    mbedtls_sha256_free(&ctx);
+    return ESP_FAIL;
+}
 
 // Maximum firmware binary we will accept (must fit in free PSRAM at OTA time).
 // frame_pool (3×512KB = 1.5MB) is already allocated before OTA runs, leaving ~6MB free.
 #define OTA_MAX_FW_SIZE (4 * 1024 * 1024)  // 4 MB ceiling
 
-static esp_err_t run_ota_from_url(const char *url)
+static esp_err_t run_ota_from_url(const char *url, const char *sha256_hex)
 {
     esp_err_t err = ESP_FAIL;
     uint8_t *fw_buf  = NULL;  // PSRAM: full firmware image
@@ -202,6 +216,33 @@ static esp_err_t run_ota_from_url(const char *url)
         goto cleanup;
     }
     ESP_LOGI(TAG, "Firmware magic byte OK (0xE9)");
+
+    // SHA-256 verification (if a hash was provided in the MQTT payload)
+    if (sha256_hex && sha256_hex[0] != '\0') {
+        ESP_LOGI(TAG, "Verifying SHA-256 against: %s", sha256_hex);
+        uint8_t digest[32];
+        if (sha256_buffer(fw_buf, fw_len, digest) != ESP_OK) {
+            ESP_LOGE(TAG, "SHA-256 computation failed — aborting");
+            err = ESP_FAIL;
+            goto cleanup;
+        }
+        // Convert digest to hex for comparison
+        char actual_hex[65];
+        for (int i = 0; i < 32; i++) {
+            snprintf(actual_hex + 2*i, 3, "%02x", digest[i]);
+        }
+        actual_hex[64] = '\0';
+        if (strncasecmp(actual_hex, sha256_hex, 64) != 0) {
+            ESP_LOGE(TAG, "SHA-256 MISMATCH — rejecting firmware");
+            ESP_LOGE(TAG, "  Expected: %s", sha256_hex);
+            ESP_LOGE(TAG, "  Actual:   %s", actual_hex);
+            err = ESP_FAIL;
+            goto cleanup;
+        }
+        ESP_LOGI(TAG, "SHA-256 verified OK");
+    } else {
+        ESP_LOGW(TAG, "No SHA-256 provided — skipping hash check");
+    }
 
     // Phase 2: Close HTTP and stop Wi-Fi BEFORE the first flash write.
     // esp_ota_begin/write disable the OPI PSRAM cache. If any Wi-Fi or lwIP
@@ -298,10 +339,15 @@ esp_err_t ota_mgr_run_pending(void)
         return ESP_OK; // No pending OTA — normal boot
     }
 
-    // Copy URL out of RTC RAM before clearing it.
+    // Copy URL and SHA-256 hash out of RTC RAM before clearing.
+    // rtc_clear_url() wipes s_expected_sha256; run_ota_from_url() reads it —
+    // so both must be captured locally BEFORE the clear.
     char url[256];
+    char sha256_hex[65];
     strncpy(url, s_url, sizeof(url));
     url[sizeof(url) - 1] = '\0';
+    strncpy(sha256_hex, s_expected_sha256, sizeof(sha256_hex));
+    sha256_hex[sizeof(sha256_hex) - 1] = '\0';
 
     // Clear RTC RAM *before* attempting OTA.
     // If OTA fails or the device crashes mid-flash, the next boot will
@@ -311,13 +357,14 @@ esp_err_t ota_mgr_run_pending(void)
     ESP_LOGW(TAG, "========================================");
     ESP_LOGW(TAG, "  PENDING OTA DETECTED");
     ESP_LOGW(TAG, "  URL: %s", url);
+    if (sha256_hex[0]) ESP_LOGW(TAG, "  SHA-256: %s", sha256_hex);
     ESP_LOGW(TAG, "  Camera NOT initialized — safe to flash");
     ESP_LOGW(TAG, "========================================");
 
     // Register main task with WDT — download can take 30-60s
     esp_task_wdt_add(NULL);
 
-    esp_err_t err = run_ota_from_url(url);
+    esp_err_t err = run_ota_from_url(url, sha256_hex[0] ? sha256_hex : NULL);
 
     esp_task_wdt_delete(NULL);
 
@@ -346,7 +393,7 @@ esp_err_t ota_mgr_run_pending(void)
 // and runs the OTA before the camera is ever initialized.
 // ========================================
 
-esp_err_t ota_mgr_start_url(const char *url)
+esp_err_t ota_mgr_start_url(const char *url, const char *sha256_hex)
 {
     if (!url || strlen(url) == 0 || strlen(url) >= sizeof(s_url)) {
         ESP_LOGE(TAG, "Invalid OTA URL (empty or too long)");
@@ -355,10 +402,13 @@ esp_err_t ota_mgr_start_url(const char *url)
 
     ESP_LOGW(TAG, "OTA requested — saving URL to RTC RAM and rebooting");
     ESP_LOGW(TAG, "URL: %s", url);
+    if (sha256_hex) {
+        ESP_LOGW(TAG, "SHA-256: %s", sha256_hex);
+    }
 
     // Write URL to RTC RAM — a plain SRAM store, no flash involved.
     // Safe to call from any task even while camera DMA is active.
-    rtc_save_url(url);
+    rtc_save_url(url, sha256_hex);
 
     // Brief delay so the MQTT broker sees the publish before we disconnect.
     mqtt_mgr_publish("ota_status", "pending_reboot");

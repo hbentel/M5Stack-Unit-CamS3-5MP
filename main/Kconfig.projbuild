@@ -16,6 +16,21 @@ config UNITCAMS3_DEVICE_ID
     string "Device ID (used as MQTT topic prefix and HA entity prefix)"
     default "unitcams3"
 
+config UNITCAMS3_OTA_TOKEN
+    string "OTA authentication token"
+    default ""
+    help
+        If non-empty, the MQTT ota/set payload must be JSON {"url":"...","token":"<this>"}
+        An empty token disables authentication (accepts bare URL strings, legacy mode).
+
+config UNITCAMS3_COREDUMP_TOKEN
+    string "Coredump authentication token"
+    default ""
+    help
+        If non-empty, the GET /api/coredump endpoint requires a Bearer token.
+        Add 'Authorization: Bearer <this>' header to your request.
+        An empty token disables authentication.
+
 config UNITCAMS3_FPS_TEST_MODE
     bool "FPS test mode (disables Wi-Fi, HTTP, MQTT — camera throughput measurement only)"
     default n

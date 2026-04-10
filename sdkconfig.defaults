@@ -113,3 +113,5 @@ CONFIG_FREERTOS_IN_IRAM=y
 # ==============================================================================
 CONFIG_UNITCAMS3_DEVICE_ID="unitcams3"
 CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=n
+CONFIG_UNITCAMS3_OTA_TOKEN=""
+CONFIG_UNITCAMS3_COREDUMP_TOKEN=""

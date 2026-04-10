@@ -5,6 +5,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.4] — 2026-04-10
+
+### Security
+
+- **OTA token authentication** — `unitcams3/ota/set` now accepts a JSON payload
+  `{"url":"...","token":"...","sha256":"..."}`. If an OTA token is configured (via
+  `/setup` or `CONFIG_UNITCAMS3_OTA_TOKEN`), the token field is required and
+  verified before the OTA is initiated; mismatched or missing tokens are silently
+  rejected. Empty token keeps legacy bare-URL behavior.
+- **OTA SHA-256 verification** — the optional `sha256` JSON field (64 hex chars)
+  is saved to `RTC_NOINIT_ATTR` alongside the URL. On the next boot, after the
+  full firmware image is downloaded into a PSRAM buffer, its SHA-256 is computed
+  and compared against the saved hash before any flash write occurs. Mismatch
+  aborts the update.
+- **Coredump Bearer auth** — `GET /api/coredump` now requires an
+  `Authorization: Bearer <token>` header when a Coredump Token is configured (via
+  `/setup` or `CONFIG_UNITCAMS3_COREDUMP_TOKEN`). Unauthenticated requests receive
+  `401 Unauthorized` with a `WWW-Authenticate` challenge. Empty token leaves
+  the endpoint open (default).
+- **`/setup` token management** — OTA Token and Coredump Token fields added to the
+  browser configuration page. Token values are never reflected in the HTML response
+  (placeholder shows "(saved)" instead of the actual value). Submitting the form
+  without touching a token field preserves the existing value.
+
+### Added
+
+- **Configurable broadcaster FPS cap** — `unitcams3/fps_cap/set` MQTT command
+  (payload `0`–`15`; `0` = unlimited). Broadcaster sleeps the remainder of each
+  frame interval; `CAMERA_GRAB_LATEST` discards stale frames while sleeping.
+  HA `number` entity. Current value reflected in `/stats` as `fps_cap`.
+- **LED control via MQTT** — GPIO 14 exposed as `unitcams3/led/set` (`1`/`0`).
+  HA `light` entity. GPIO access kept in `main.c` via registered callback.
+- **Wi-Fi re-provisioning via MQTT** — `unitcams3/reprovision` command clears NVS
+  provisioning data and reboots into BLE provisioning mode.
+- **`broadcast_fps` in `/stats`** — delta of broadcaster frame counter; distinct
+  from `fps` (ISR VSYNC rate).
+- **`frames_delivered` counter** — cumulative frames sent to all MJPEG clients since
+  boot; exposed in `/stats`.
+- **Long-term soak metrics** — `internal_min` and `psram_min` (minimum free since
+  boot) tracked in `/stats`; `heap_min` published to MQTT every 10 s.
+- **Task stack HWM** — broadcaster and HTTP task HWMs reported in `/stats` as
+  `stack_hwm.broadcaster_words` / `http_task_words`; per-worker minimum in
+  `worker_min_words`.
+
+### Fixed
+
+- **IDF v6 re-provisioning API** — `wifi_v6.c` updated to use
+  `network_prov_mgr_reset_wifi_provisioning()` (v6 renamed from
+  `network_prov_mgr_reset_provisioning()`); fixes v6 CI build failure.
+- **IPC task stack overflow** — `CONFIG_ESP_IPC_TASK_STACK_SIZE` raised from 1280
+  to 2048 bytes. The previous size caused a double-exception crash during
+  `nvs_commit()` at boot when GPIO was initialized inside `mqtt_mgr`.
+- **`esp_driver_gpio` removed from `mqtt_mgr`** — GPIO access moved to a
+  registered callback in `main.c`, eliminating the dependency that changed binary
+  layout and triggered the IPC stack overflow.
+
+---
+
 ## [v0.2.3] — 2026-04-05
 
 ### Added

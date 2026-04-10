@@ -601,6 +601,28 @@ static esp_err_t logs_handler(httpd_req_t *req)
 // Handler for "/api/coredump" — stream raw coredump partition
 static esp_err_t coredump_handler(httpd_req_t *req)
 {
+    // Bearer token auth — if a token is configured, enforce it.
+    const char *expected = config_mgr_get_coredump_token();
+    if (expected && expected[0] != '\0') {
+        char auth_hdr[96] = {0};
+        esp_err_t hdr_err = httpd_req_get_hdr_value_str(req, "Authorization",
+                                                          auth_hdr, sizeof(auth_hdr));
+        bool authorized = false;
+        if (hdr_err == ESP_OK) {
+            // auth_hdr should be "Bearer <token>"
+            const char *prefix = "Bearer ";
+            if (strncmp(auth_hdr, prefix, strlen(prefix)) == 0) {
+                authorized = (strcmp(auth_hdr + strlen(prefix), expected) == 0);
+            }
+        }
+        if (!authorized) {
+            httpd_resp_set_status(req, "401 Unauthorized");
+            httpd_resp_set_hdr(req, "WWW-Authenticate", "Bearer realm=\"coredump\"");
+            httpd_resp_sendstr(req, "Unauthorized");
+            return ESP_FAIL;
+        }
+    }
+
     const esp_partition_t *part = esp_partition_find_first(
         ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, NULL);
     if (!part) {
@@ -723,13 +745,21 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
         "</label>"
         "<input type='text' name='device_id' value='%s' pattern='[a-z0-9_]+' "
         "title='Lowercase letters, numbers and underscores only'>"
+        
+        "<label>OTA Token (empty to disable auth)</label>"
+        "<input type='password' name='ota_token' placeholder='%s'>"
+        "<label>Coredump Token (empty to disable auth)</label>"
+        "<input type='password' name='cd_token' placeholder='%s'>"
+
         "<label>Camera Resolution</label>"
         "<select name='cam_res'>",
         config_mgr_is_mqtt_enabled() ? " checked" : "",
         config_mgr_get_mqtt_url(),
         config_mgr_get_mqtt_user(),
         config_mgr_get_mqtt_pass(),
-        config_mgr_get_device_id());
+        config_mgr_get_device_id(),
+        config_mgr_get_ota_token()[0] ? "(saved — leave blank to keep)" : "(no token set)",
+        config_mgr_get_coredump_token()[0] ? "(saved — leave blank to keep)" : "(no token set)");
 
     uint8_t cur_res = config_mgr_get_cam_resolution();
     for (int i = 0; i < 4; i++) {
@@ -811,7 +841,7 @@ static esp_err_t factory_reset_handler(httpd_req_t *req)
 /* POST /setup — parse form body, update config, schedule restart */
 static esp_err_t setup_post_handler(httpd_req_t *req)
 {
-#define SETUP_BODY_MAX 512
+#define SETUP_BODY_MAX 768
     char body[SETUP_BODY_MAX + 1];
     int total = req->content_len;
     if (total > SETUP_BODY_MAX) total = SETUP_BODY_MAX;
@@ -828,6 +858,8 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
     char mqtt_user[64]  = {0};
     char mqtt_pass[64]  = {0};
     char device_id[32]  = {0};
+    char ota_token[64]  = {0};
+    char cd_token[64]   = {0};
     bool mqtt_en        = false;
     char cam_res_s[8]   = {0};
     char jpeg_qual_s[8] = {0};
@@ -847,6 +879,8 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
             else if (strcmp(key, "mqtt_user") == 0) strlcpy(mqtt_user,   decoded, sizeof(mqtt_user));
             else if (strcmp(key, "mqtt_pass") == 0) strlcpy(mqtt_pass,   decoded, sizeof(mqtt_pass));
             else if (strcmp(key, "device_id") == 0) strlcpy(device_id,   decoded, sizeof(device_id));
+            else if (strcmp(key, "ota_token") == 0) strlcpy(ota_token,   decoded, sizeof(ota_token));
+            else if (strcmp(key, "cd_token")  == 0) strlcpy(cd_token,    decoded, sizeof(cd_token));
             else if (strcmp(key, "mqtt_en")   == 0) mqtt_en = (decoded[0] == '1');
             else if (strcmp(key, "cam_res")   == 0) strlcpy(cam_res_s,   decoded, sizeof(cam_res_s));
             else if (strcmp(key, "jpeg_qual") == 0) strlcpy(jpeg_qual_s, decoded, sizeof(jpeg_qual_s));
@@ -875,6 +909,8 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
     config_mgr_set_mqtt_user(mqtt_user);
     config_mgr_set_mqtt_pass(mqtt_pass);
     config_mgr_set_device_id(device_id);
+    if (ota_token[0]) config_mgr_set_ota_token(ota_token);
+    if (cd_token[0])  config_mgr_set_coredump_token(cd_token);
     config_mgr_set_mqtt_enabled(mqtt_en);
     config_mgr_set_cam_resolution((uint8_t)cam_res);
     config_mgr_set_jpeg_quality((uint8_t)jpeg_qual);

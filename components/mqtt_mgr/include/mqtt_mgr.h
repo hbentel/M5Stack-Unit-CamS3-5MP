@@ -33,8 +33,9 @@ void mqtt_mgr_stop(void);
 /**
  * @brief Register a callback for OTA URL commands received via MQTT.
  *        Called by ota_mgr_init() to avoid a circular link dependency.
+ *        sha256_hex may be NULL if no hash was provided in the payload.
  */
-void mqtt_mgr_register_ota_callback(esp_err_t (*cb)(const char *url));
+void mqtt_mgr_register_ota_callback(esp_err_t (*cb)(const char *url, const char *sha256_hex));
 
 /**
  * @brief Register a callback for Wi-Fi re-provisioning commands received via MQTT.
