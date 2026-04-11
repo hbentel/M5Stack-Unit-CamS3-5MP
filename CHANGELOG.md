@@ -5,6 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.5] — 2026-04-11
+
+### Fixed
+
+- **Recovery manager crash loop** — `recovery_mgr_init()` was called after Wi-Fi
+  and MQTT were already running. Its `nvs_commit()` disables the OPI PSRAM cache;
+  concurrent PSRAM access by the Wi-Fi task caused ExcCause=7 → crash → boot loop.
+  Fix: moved `recovery_mgr_init()` to before `wifi_init_sta()`, while no
+  PSRAM-accessing tasks are alive. Root cause confirmed via coredump analysis.
+- **IDF v6 CI build failure** — `sha256_buffer()` used the legacy
+  `mbedtls_sha256_*` context API removed in mbedTLS 4.0 (IDF v6). Replaced with
+  `psa_hash_compute()` from the PSA Crypto API, compatible with both IDF v5
+  (mbedTLS 3.x) and IDF v6 (mbedTLS 4.0).
+
+---
+
 ## [v0.2.4] — 2026-04-10
 
 ### Security
