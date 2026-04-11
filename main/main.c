@@ -223,6 +223,16 @@ void app_main(void)
     ESP_LOGI(TAG, "  Phase 2: Network & Services");
     ESP_LOGI(TAG, "========================================");
 
+    // Recovery manager writes NVS (nvs_commit) — must run BEFORE Wi-Fi and MQTT
+    // are started. nvs_commit disables the OPI PSRAM cache; any concurrent PSRAM
+    // access by Wi-Fi/MQTT tasks causes ExcCause=7 → crash. Running it here, while
+    // no PSRAM-accessing tasks are alive, is safe.
+    ESP_LOGI(TAG, "--- Starting Recovery Manager ---");
+    err = recovery_mgr_init(NULL); // Use defaults
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Recovery Mgr Init Failed!");
+    }
+
     ESP_LOGI(TAG, "--- Starting Wi-Fi ---");
     err = wifi_init_sta();
     if (err != ESP_OK) {
@@ -262,12 +272,6 @@ void app_main(void)
         mqtt_mgr_register_led_callback(led_set_level);
     } else {
         ESP_LOGI(TAG, "MQTT disabled by config — skipping");
-    }
-
-    ESP_LOGI(TAG, "--- Starting Recovery Manager ---");
-    err = recovery_mgr_init(NULL); // Use defaults
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Recovery Mgr Init Failed!");
     }
 
     /* Phase 1: Initialize Camera AFTER Wi-Fi/NVS are settled.

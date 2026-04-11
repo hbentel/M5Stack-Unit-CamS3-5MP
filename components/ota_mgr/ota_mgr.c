@@ -98,24 +98,21 @@ static void rtc_clear_url(void)
 // Core OTA: download-to-PSRAM → stop-wifi → flash
 // ========================================
 
-#include "mbedtls/sha256.h"
+#include "psa/crypto.h"
 
 // Compute SHA-256 of buf[0..len-1], write 32 bytes to digest[].
+// Uses PSA Crypto API — compatible with both mbedTLS 3.x (IDF v5) and
+// mbedTLS 4.0 (IDF v6) which removed the legacy mbedtls_sha256_* context API.
 static esp_err_t sha256_buffer(const uint8_t *buf, size_t len, uint8_t digest[32])
 {
-    mbedtls_sha256_context ctx;
-    mbedtls_sha256_init(&ctx);
-    int ret = mbedtls_sha256_starts(&ctx, 0); // 0 = SHA-256 (not SHA-224)
-    if (ret != 0) goto fail;
-    ret = mbedtls_sha256_update(&ctx, buf, len);
-    if (ret != 0) goto fail;
-    ret = mbedtls_sha256_finish(&ctx, digest);
-    if (ret != 0) goto fail;
-    mbedtls_sha256_free(&ctx);
+    psa_crypto_init(); // idempotent — safe to call multiple times
+    size_t out_len = 0;
+    psa_status_t status = psa_hash_compute(PSA_ALG_SHA_256, buf, len, digest, 32, &out_len);
+    if (status != PSA_SUCCESS || out_len != 32) {
+        ESP_LOGE("ota_mgr", "psa_hash_compute failed: %d", (int)status);
+        return ESP_FAIL;
+    }
     return ESP_OK;
-fail:
-    mbedtls_sha256_free(&ctx);
-    return ESP_FAIL;
 }
 
 // Maximum firmware binary we will accept (must fit in free PSRAM at OTA time).
