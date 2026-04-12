@@ -33,11 +33,12 @@ PY260 sensor → GDMA → PSRAM frame buffers (4 × ~512 KB)
                   Frigate / Browser MJPEG client
 ```
 
-**Frame pool sizing:** 3 slots × 512 KB = 1.5 MB PSRAM. Peak simultaneous usage
-is 2 slots (broadcaster's current frame + workers mid-send). The 3rd slot covers
-the transitional moment when the broadcaster has written a new frame but not yet
-unreffed the old one. All workers share a single ref to the same buffer — no
-per-worker copy is made.
+**Frame pool sizing:** 5 slots × 512 KB = 2.5 MB PSRAM. Normal peak usage is
+2 slots (broadcaster's current frame + workers mid-send, all sharing one ref).
+A concurrent `GET /` snapshot holds a ref to the current broadcast frame while
+sending the HTTP response; combined with a worker mid-send on the previous frame,
+this can occupy 3 slots simultaneously. 5 slots ensures the broadcaster always
+has free slots even with a snapshot and multiple workers active.
 
 **Core assignments:**
 - Core 0: Wi-Fi / lwIP stack
@@ -96,7 +97,7 @@ This firmware uses a strict memory allocation strategy to ensure stability on th
   The main initialization task stack is increased to 16 KB to accommodate heavy simultaneous startup of mDNS, MQTT, and the Camera driver.
 
 - **Frame Buffers (PSRAM ONLY)**: 
-  Large image data is kept in PSRAM to prevent internal memory exhaustion. The `frame_pool` uses 3 × 512 KB buffers (1.5 MB total). With atomic reference counting, workers share refs to the same buffer rather than holding private copies, so 3 slots are sufficient for peak load.
+  Large image data is kept in PSRAM to prevent internal memory exhaustion. The `frame_pool` uses 5 × 512 KB buffers (2.5 MB total). With atomic reference counting, workers share refs to the same buffer rather than holding private copies. 5 slots are required to handle concurrent snapshot requests (which hold a ref while sending the HTTP response) alongside active streaming workers.
 
 ---
 
@@ -216,7 +217,7 @@ the flag — preventing deliberate reboots from tripping the boot-loop threshold
 | Component | Purpose |
 |-----------|---------|
 | `esp32-camera/` | Forked M5Stack driver — PY260/mega_ccm only, JPEG only, ISR on Core 1 |
-| `frame_pool/` | 3 × 512 KB PSRAM buffers; C11 atomic ref counting (`frame_pool_ref`/`frame_pool_unref`) for zero-copy multi-client delivery |
+| `frame_pool/` | 5 × 512 KB PSRAM buffers; C11 atomic ref counting (`frame_pool_ref`/`frame_pool_unref`) for zero-copy multi-client delivery |
 | `jpeg_validate/` | SOI/EOI boundary check + atomic drop counter |
 | `http_server/` | Port 80: snapshot, health (incl. `reset_reason`), stats, coredump, logs; Port 81: MJPEG stream |
 | `log_buf/` | 16 KB PSRAM ring buffer hooked into `esp_log_set_vprintf()`; exposes `log_buf_snapshot()` for `/api/logs` |

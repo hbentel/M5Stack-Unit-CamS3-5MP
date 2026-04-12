@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.6] — 2026-04-12
+
+### Fixed
+
+- **Frame pool exhaustion under concurrent snapshot + stream** — with 3 pool slots,
+  a simultaneous `GET /` snapshot (holding a ref while sending ~150 KB over HTTP)
+  combined with a worker mid-send on the previous frame exhausted all slots. The
+  broadcaster stalled for up to ~5 s, causing Frigate's 20 s ffmpeg watchdog to fire
+  and restart the capture thread. Fix: pool size increased from 3 → 5 slots
+  (2.5 MB PSRAM). With 5 slots, snapshot(1) + worker(1) + broadcaster(1) still
+  leaves 2 free slots, eliminating the exhaustion window entirely.
+
+---
+
 ## [v0.2.5] — 2026-04-11
 
 ### Fixed

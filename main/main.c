@@ -207,12 +207,15 @@ void app_main(void)
     ESP_LOGI(TAG, "--- Initializing Frame Pool ---");
     // 8 buffers x 512KB = 4.0MB fixed PSRAM usage
     // Sized to support up to UXGA (1600x1200) high-quality JPEGs
-    // 3 slots × 512 KB = 1.5 MB PSRAM.
-    // With atomic ref counting, peak simultaneous usage is 2 slots
-    // (1 held by broadcaster as s_broadcast_fb + 1 held by workers mid-send,
-    // all workers share the same ref to the same buffer). The 3rd slot is the
-    // transitional buffer during broadcaster swap. No per-worker copy needed.
-    err = frame_pool_init(3, 512 * 1024);
+    // 5 slots × 512 KB = 2.5 MB PSRAM.
+    // Normal peak usage is 2 slots (s_broadcast_fb + 1 worker mid-send, all
+    // workers share the same ref). A simultaneous snapshot (GET /) holds a ref
+    // to the current broadcast frame while sending the HTTP response; combined
+    // with a worker mid-send on the previous frame, this can exhaust a 3-slot
+    // pool and stall the broadcaster for up to ~5s → Frigate 20s watchdog fires.
+    // 5 slots eliminates the exhaustion: snapshot(1) + worker(1) + broadcaster(1)
+    // still leaves 2 free slots for the broadcaster to cycle into.
+    err = frame_pool_init(5, 512 * 1024);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Frame Pool Init Failed!");
         while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
