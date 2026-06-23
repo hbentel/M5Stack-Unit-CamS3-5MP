@@ -5,6 +5,48 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.7] — 2026-06-23
+
+### Fixed
+
+- **OTA rollback-confirmation crash** — `esp_ota_mark_app_valid_cancel_rollback()`
+  was deferred via a 2-minute health timer, by which point Wi-Fi/MQTT were already
+  active. The resulting `otadata` flash erase disables the OPI PSRAM cache; two
+  coredumps confirmed the Wi-Fi task itself was corrupted by the cache-disable
+  race, even with the camera not yet initialized — proving the hazard isn't
+  camera-GDMA-specific. Fix: moved the confirmation into `recovery_mgr_init()`,
+  in the same pre-Wi-Fi window the boot-loop NVS write has always used safely.
+- **OTA SHA-256 hashing failure** — one-shot `psa_hash_compute()` over the
+  ~1.3 MB firmware image failed with `PSA_ERROR_INSUFFICIENT_MEMORY` (only
+  ~77 KB internal heap free at OTA time). Fix: hash incrementally in 16 KB
+  chunks via `psa_hash_setup`/`update`/`finish`.
+- **`/setup` POST body truncation** — `httpd_req_recv()` returned partial reads
+  for bodies spanning multiple TCP segments, silently truncating form fields.
+  Fix: loop until the full (capped) body is received.
+- **Frame pool init leak** — a failed allocation partway through
+  `frame_pool_init()` leaked the mutex/semaphore/already-allocated PSRAM
+  buffers. Fix: clean up everything allocated so far on failure.
+- **JPEG EOI search UB** — the backward `0xFF 0xD9` search in `cam_hal.c` built
+  a pointer that could decrement past the start of the buffer when no marker
+  was found. Fix: rewritten with bounded unsigned index arithmetic.
+
+### Security
+
+- **`/setup` XSS hardening** — MQTT URL/user/pass and device ID are now
+  HTML-escaped before being embedded in the `/setup` page, preventing a
+  malicious config value from injecting markup.
+
+### Changed
+
+- **`config_mgr` validation** — resolution/quality are now validated at every
+  setter, not just NVS load; `config_mgr_save()` aborts without committing if
+  any `nvs_set_*` call fails.
+- **README** — go2rtc example switched to a direct passthrough restream
+  (needed for Frigate VOD/timeline) instead of the ffmpeg transpose re-encode
+  pipeline.
+
+---
+
 ## [v0.2.6] — 2026-04-12
 
 ### Fixed
