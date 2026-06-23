@@ -21,6 +21,7 @@
 #include "config_mgr.h"
 #include "mdns.h"
 #include "log_buf.h"
+#include "nvs_flash.h"
 
 // 10MHz: hard ceiling — PY260 front porch too short at 16/20MHz regardless of ISR weight
 #define CAM_XCLK_FREQ_HZ 10000000
@@ -192,6 +193,22 @@ void app_main(void)
     }
 
     log_buf_init(); // Start capturing logs to PSRAM ring buffer (non-fatal if PSRAM unavailable)
+
+    // Initialize NVS here, before recovery_mgr_init() and config_mgr_init() read
+    // it. Previously the only nvs_flash_init() lived inside wifi_init_sta(), which
+    // runs AFTER recovery_mgr_init() — so recovery's nvs_open() failed every boot,
+    // the health timer never armed, and esp_ota_mark_app_valid_cancel_rollback()
+    // was never called → an OTA'd image would roll back on the next reboot. This
+    // is a flash READ/erase only and runs before the camera starts, so it is safe.
+    err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGW(TAG, "NVS needs erase (err=0x%x) — erasing and reinitializing", err);
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_flash_init failed: 0x%x — recovery/config NVS will fall back to defaults", err);
+    }
 
     // GPIO 14 — onboard LED, active high, controlled via MQTT unitcams3/led/set
     gpio_config_t led_cfg = {

@@ -36,13 +36,6 @@ esp_err_t recovery_mgr_init(const recovery_config_t *config);
 void recovery_mgr_report_error(recovery_error_t error);
 
 /**
- * @brief Mark the system as healthy, resetting the boot counter.
- * Called automatically via timer after 2 minutes of stable uptime.
- * Can also be called manually.
- */
-void recovery_mgr_mark_healthy(void);
-
-/**
  * @brief Check if the device is currently in Safe Mode.
  */
 bool recovery_mgr_is_safe_mode(void);

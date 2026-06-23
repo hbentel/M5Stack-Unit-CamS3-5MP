@@ -28,16 +28,8 @@ static bool s_safe_mode = false;
 static int s_reinit_count = 0;
 static int s_total_errors = 0;
 static int64_t s_last_error_time = 0;
-static esp_timer_handle_t s_health_timer = NULL;
 
 #define ERROR_WINDOW_US   60000000   // 1 minute window for error counting
-#define HEALTHY_DELAY_US  120000000  // 2 minutes before marking healthy
-
-// Timer callback — fires once after 2 minutes of stable uptime
-static void health_timer_cb(void *arg)
-{
-    recovery_mgr_mark_healthy();
-}
 
 esp_err_t recovery_mgr_init(const recovery_config_t *config)
 {
@@ -74,40 +66,28 @@ esp_err_t recovery_mgr_init(const recovery_config_t *config)
         s_safe_mode = true;
     }
 
-    nvs_close(nvs_h);
-
-    // Start one-shot timer to mark healthy after 2 minutes
-    const esp_timer_create_args_t timer_args = {
-        .callback = health_timer_cb,
-        .name = "recovery_health"
-    };
-    err = esp_timer_create(&timer_args, &s_health_timer);
-    if (err == ESP_OK) {
-        esp_timer_start_once(s_health_timer, HEALTHY_DELAY_US);
-        ESP_LOGI(TAG, "Health timer started (2 min)");
-    }
-
-    return ESP_OK;
-}
-
-void recovery_mgr_mark_healthy(void)
-{
-    // Confirm OTA image is valid — prevents auto-rollback on next reboot
-    esp_ota_mark_app_valid_cancel_rollback();
-
-    nvs_handle_t nvs_h;
-    if (nvs_open("recovery", NVS_READWRITE, &nvs_h) == ESP_OK) {
+    // Confirm OTA validity and reset the boot counter now, before Wi-Fi starts.
+    // esp_ota_mark_app_valid_cancel_rollback() and nvs_commit() are flash writes
+    // that disable the OPI PSRAM cache; any task concurrently touching
+    // cache-mapped memory during that window double-faults the CPU (see CLAUDE.md
+    // flash-write safety rule). This used to run ~2 minutes into boot, after
+    // Wi-Fi/MQTT were already active and the camera was streaming — confirmed via
+    // coredump that Wi-Fi's own task was the concurrent victim every time, even
+    // with the camera not yet initialized. This exact point, before Wi-Fi starts,
+    // is the only one that's been flash-write-safe for the project's entire
+    // history (the boot_count write above runs here too). Skipped when a boot
+    // loop is detected so a genuinely bad OTA image still gets rolled back by the
+    // bootloader's native pending-verify mechanism instead of being confirmed.
+    if (!s_safe_mode) {
+        esp_ota_mark_app_valid_cancel_rollback();
         nvs_set_i32(nvs_h, "boot_count", 0);
         nvs_commit(nvs_h);
-        nvs_close(nvs_h);
-        ESP_LOGI(TAG, "System marked healthy. Boot counter reset. OTA rollback cancelled.");
+        ESP_LOGI(TAG, "OTA rollback cancelled, boot counter reset.");
     }
 
-    // Also clear safe mode if we've been stable
-    if (s_safe_mode) {
-        ESP_LOGW(TAG, "Clearing safe mode — system is stable.");
-        s_safe_mode = false;
-    }
+    nvs_close(nvs_h);
+
+    return ESP_OK;
 }
 
 void recovery_mgr_report_error(recovery_error_t error)

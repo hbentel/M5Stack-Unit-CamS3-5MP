@@ -84,7 +84,7 @@ The VSYNC ISR has two hard requirements that must not be removed:
 | `http_server/` | Port 80: snapshot `/`, health `/health` (incl. `reset_reason`), stats `/stats`, coredump `/api/coredump`, logs `/api/logs`; Port 81: MJPEG stream `/stream` |
 | `ota_mgr/` | URL-based OTA via MQTT — publish firmware URL to `unitcams3/ota/set` |
 | `mqtt_mgr/` | MQTT client, HA auto-discovery, telemetry every 10s, command handling |
-| `recovery_mgr/` | NVS boot-loop detection (threshold=3), safe mode, 2-min health timer, OTA rollback confirmation |
+| `recovery_mgr/` | NVS boot-loop detection (threshold=3), safe mode, OTA rollback confirmation (synchronous, pre-Wi-Fi) |
 
 ### HTTP Ports Summary
 
@@ -114,6 +114,8 @@ Base topic: `unitcams3`
 
 **Why not NVS?** `nvs_commit()` writes flash and disables the OPI PSRAM cache — the same mechanism that causes OTA flash crashes. If camera DMA is active when any flash write disables the cache, the CPU gets ExcCause=7 (cache-disabled cached-memory access) → double exception. This was the root cause of all OTA crashes observed during development.
 
+**The hazard is not camera-specific.** A later bug (`recovery_mgr_mark_healthy`'s `esp_ota_mark_app_valid_cancel_rollback()` → `rewrite_ota_seq` → otadata flash erase, originally deferred ~2 min into boot) crashed with the identical double-exception signature even with the camera not yet initialized — confirmed via coredump that the *Wi-Fi task itself* was the corrupted thread, with MQTT/lwIP actively transacting at the time. The only window proven safe across this project's history is **before Wi-Fi starts** (where the `recovery_mgr` boot-loop NVS write has always lived). Treat any flash write issued after `wifi_init_sta()` as unsafe, not just ones concurrent with camera GDMA.
+
 **Why RTC RAM?** `RTC_NOINIT_ATTR` places data in `.rtc_noinit` — a `(NOLOAD)` section with no flash image. The bootloader skips it on every reset, so values survive `esp_restart()`. **Do not use `RTC_DATA_ATTR` for this** — the bootloader re-copies `.rtc.data` from flash on every non-deep-sleep reset, overwriting values written before the reboot. `RTC_DATA_ATTR` is for deep-sleep persistence only.
 
 **OTA flow:**
@@ -121,7 +123,7 @@ Base topic: `unitcams3`
 2. Next boot: `ota_mgr_run_pending()` called from `main.c` after Wi-Fi, **before** `esp_camera_init()`
 3. If URL found in RTC RAM (integrity check passes): validates magic byte (0xE9), downloads full firmware to PSRAM buffer, verifies SHA-256 (if provided), validates content_length, flashes, reboots
 4. If OTA fails: RTC RAM cleared (no boot loop), normal boot continues — retrigger via MQTT
-5. On success: reboots into new firmware; `recovery_mgr` marks healthy after 2 min via `esp_ota_mark_app_valid_cancel_rollback()`
+5. On success: reboots into new firmware; `recovery_mgr_init()` calls `esp_ota_mark_app_valid_cancel_rollback()` immediately, before Wi-Fi starts (the only flash-write-safe window — see Flash-write safety rule below)
 
 **Protections:**
 - Token auth: if `CONFIG_UNITCAMS3_OTA_TOKEN` is set (or configured via `/setup`), the MQTT payload must be JSON `{"url":"...","token":"<token>"}` — bare URL strings are rejected
