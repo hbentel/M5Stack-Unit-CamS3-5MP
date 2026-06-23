@@ -106,10 +106,36 @@ static void rtc_clear_url(void)
 static esp_err_t sha256_buffer(const uint8_t *buf, size_t len, uint8_t digest[32])
 {
     psa_crypto_init(); // idempotent — safe to call multiple times
+
+    // Hash incrementally in chunks. The one-shot psa_hash_compute() over the
+    // whole firmware image (~1.3 MB in PSRAM) returns PSA_ERROR_INSUFFICIENT_MEMORY
+    // (-141) because only ~77 KB of internal heap is free at OTA time and the PSA
+    // path needs a large internal working buffer. Multi-part hashing bounds the
+    // peak working set to one CHUNK regardless of total image size.
+    psa_hash_operation_t op = PSA_HASH_OPERATION_INIT;
+    psa_status_t status = psa_hash_setup(&op, PSA_ALG_SHA_256);
+    if (status != PSA_SUCCESS) {
+        ESP_LOGE("ota_mgr", "psa_hash_setup failed: %d", (int)status);
+        return ESP_FAIL;
+    }
+
+    const size_t CHUNK = 16 * 1024;
+    for (size_t off = 0; off < len; ) {
+        size_t n = (len - off < CHUNK) ? (len - off) : CHUNK;
+        status = psa_hash_update(&op, buf + off, n);
+        if (status != PSA_SUCCESS) {
+            ESP_LOGE("ota_mgr", "psa_hash_update failed: %d", (int)status);
+            psa_hash_abort(&op);
+            return ESP_FAIL;
+        }
+        off += n;
+    }
+
     size_t out_len = 0;
-    psa_status_t status = psa_hash_compute(PSA_ALG_SHA_256, buf, len, digest, 32, &out_len);
+    status = psa_hash_finish(&op, digest, 32, &out_len);
     if (status != PSA_SUCCESS || out_len != 32) {
-        ESP_LOGE("ota_mgr", "psa_hash_compute failed: %d", (int)status);
+        ESP_LOGE("ota_mgr", "psa_hash_finish failed: %d", (int)status);
+        psa_hash_abort(&op);
         return ESP_FAIL;
     }
     return ESP_OK;

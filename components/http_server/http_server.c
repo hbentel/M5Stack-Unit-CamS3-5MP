@@ -688,6 +688,31 @@ static void url_decode(char *dst, const char *src, size_t dst_size)
     dst[i] = '\0';
 }
 
+/* Escape HTML-special characters so user-controlled config values (MQTT URL,
+ * username, password, device ID) cannot break out of an attribute or inject
+ * markup into the /setup admin page. Truncates safely on the entity boundary
+ * (never splits an entity) if dst is too small, and always null-terminates. */
+static void html_escape(char *dst, const char *src, size_t dst_size)
+{
+    if (dst_size == 0) return;
+    size_t o = 0;
+    for (const char *p = src; *p; p++) {
+        const char *ent; size_t elen;
+        switch (*p) {
+            case '&':  ent = "&amp;";  elen = 5; break;
+            case '<':  ent = "&lt;";   elen = 4; break;
+            case '>':  ent = "&gt;";   elen = 4; break;
+            case '"':  ent = "&quot;"; elen = 6; break;
+            case '\'': ent = "&#39;";  elen = 5; break;
+            default:   ent = NULL;     elen = 1; break;
+        }
+        if (o + elen >= dst_size) break;   // leave room for the null terminator
+        if (ent) { memcpy(dst + o, ent, elen); o += elen; }
+        else     { dst[o++] = *p; }
+    }
+    dst[o] = '\0';
+}
+
 /* GET /setup — HTML config form pre-filled with current values */
 static esp_err_t setup_get_handler(httpd_req_t *req)
 {
@@ -727,6 +752,13 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
         "<form method='POST' action='/setup'>",
         ip_str, ip_str, ip_str, app->version);
 
+    /* HTML-escape user-controlled values before embedding them in attributes */
+    char url_esc[384], user_esc[256], pass_esc[256], dev_esc[192];
+    html_escape(url_esc,  config_mgr_get_mqtt_url(),  sizeof(url_esc));
+    html_escape(user_esc, config_mgr_get_mqtt_user(), sizeof(user_esc));
+    html_escape(pass_esc, config_mgr_get_mqtt_pass(), sizeof(pass_esc));
+    html_escape(dev_esc,  config_mgr_get_device_id(), sizeof(dev_esc));
+
     pos += snprintf(buf + pos, sizeof(buf) - pos,
         "<label><input type='checkbox' name='mqtt_en' value='1' id='mqtt_en'%s> Enable MQTT</label>"
         "<div id='mqtt_fields'>"
@@ -754,10 +786,10 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
         "<label>Camera Resolution</label>"
         "<select name='cam_res'>",
         config_mgr_is_mqtt_enabled() ? " checked" : "",
-        config_mgr_get_mqtt_url(),
-        config_mgr_get_mqtt_user(),
-        config_mgr_get_mqtt_pass(),
-        config_mgr_get_device_id(),
+        url_esc,
+        user_esc,
+        pass_esc,
+        dev_esc,
         config_mgr_get_ota_token()[0] ? "(saved — leave blank to keep)" : "(no token set)",
         config_mgr_get_coredump_token()[0] ? "(saved — leave blank to keep)" : "(no token set)");
 
@@ -823,6 +855,8 @@ static void factory_reset_task(void *arg)
 static esp_err_t factory_reset_handler(httpd_req_t *req)
 {
     ESP_LOGW(TAG, "Factory reset requested — erasing NVS and rebooting");
+    char dev_esc[192];
+    html_escape(dev_esc, config_mgr_get_device_id(), sizeof(dev_esc));
     char resp_html[512];
     snprintf(resp_html, sizeof(resp_html),
         "<!DOCTYPE html><html><head><meta charset='utf-8'></head><body>"
@@ -831,7 +865,7 @@ static esp_err_t factory_reset_handler(httpd_req_t *req)
         "<p>Use the <strong>Espressif BLE Provisioning</strong> app to reconnect "
         "(<strong>PROV_%s</strong>), then visit /setup to reconfigure.</p>"
         "</body></html>",
-        config_mgr_get_device_id());
+        dev_esc);
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, resp_html, strlen(resp_html));
     xTaskCreate(factory_reset_task, "factory_rst", 4096, NULL, 5, NULL);
@@ -846,7 +880,16 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
     int total = req->content_len;
     if (total > SETUP_BODY_MAX) total = SETUP_BODY_MAX;
 
-    int received = httpd_req_recv(req, body, total);
+    /* httpd_req_recv() returns whatever a single socket read yields, which can
+     * be less than content_len when the body spans multiple TCP segments. Loop
+     * until we have the whole (capped) body so form fields are never truncated. */
+    int received = 0;
+    while (received < total) {
+        int r = httpd_req_recv(req, body + received, total - received);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;   // transient — retry
+        if (r <= 0) break;                            // connection closed/error
+        received += r;
+    }
     if (received <= 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
         return ESP_FAIL;

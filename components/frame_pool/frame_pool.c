@@ -31,11 +31,11 @@ esp_err_t frame_pool_init(int count, size_t size)
 
     s_pool.mutex = xSemaphoreCreateMutex();
     s_pool.available_sem = xSemaphoreCreateCounting(count, count);
-    if (!s_pool.mutex || !s_pool.available_sem) return ESP_ERR_NO_MEM;
+    if (!s_pool.mutex || !s_pool.available_sem) goto fail;
 
     // Allocate the slot metadata array (internal RAM is fine for small structs)
     s_pool.slots = calloc(count, sizeof(pool_slot_t));
-    if (!s_pool.slots) return ESP_ERR_NO_MEM;
+    if (!s_pool.slots) goto fail;
 
     s_pool.count = count;
 
@@ -44,7 +44,7 @@ esp_err_t frame_pool_init(int count, size_t size)
         void *ptr = heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
         if (!ptr) {
             ESP_LOGE(TAG, "Failed to allocate PSRAM buffer %d!", i);
-            return ESP_ERR_NO_MEM; // In production, clean up previous allocs
+            goto fail;
         }
         s_pool.slots[i].buffer.buf = ptr;
         s_pool.slots[i].buffer.capacity = size;
@@ -53,8 +53,25 @@ esp_err_t frame_pool_init(int count, size_t size)
         s_pool.slots[i].in_use = false;
         s_pool.slots[i].buffer.ctx = (void*)(intptr_t)i; // Store index for debugging
     }
-    
+
     return ESP_OK;
+
+fail:
+    // All-or-nothing: free anything already allocated so a retry starts clean
+    // and partial state never leaks. calloc zeroes unallocated bufs to NULL.
+    if (s_pool.slots) {
+        for (int i = 0; i < count; i++) {
+            if (s_pool.slots[i].buffer.buf) {
+                heap_caps_free(s_pool.slots[i].buffer.buf);
+            }
+        }
+        free(s_pool.slots);
+        s_pool.slots = NULL;
+    }
+    if (s_pool.mutex)        { vSemaphoreDelete(s_pool.mutex);        s_pool.mutex = NULL; }
+    if (s_pool.available_sem){ vSemaphoreDelete(s_pool.available_sem); s_pool.available_sem = NULL; }
+    s_pool.count = 0;
+    return ESP_ERR_NO_MEM;
 }
 
 frame_buffer_t* frame_pool_get(uint32_t timeout_ms)

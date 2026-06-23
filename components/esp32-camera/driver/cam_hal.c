@@ -81,15 +81,17 @@ static int cam_verify_jpeg_eoi(const uint8_t *inbuf, uint32_t length)
     if (length < 2) return -1;
     // Limit search to last 32KB
     uint32_t search_len = (length > 32768) ? 32768 : length;
-    const uint8_t *start = inbuf + length - search_len;
-    const uint8_t *ptr = inbuf + length - 2;
+    uint32_t start = length - search_len;   // lowest index to inspect
 
-    // Backward search for 0xFF 0xD9
-    while (ptr >= start) {
-        if (ptr[0] == 0xFF && ptr[1] == 0xD9) {
-            return ptr - inbuf;
+    // Backward search for 0xFF 0xD9 using unsigned indices. The loop is bounded
+    // below by `start` and breaks before decrementing past it, so it never forms
+    // a pointer before the start of the buffer (which the pointer-based version
+    // did — undefined behaviour in C).
+    for (uint32_t p = length - 2; ; p--) {
+        if (inbuf[p] == 0xFF && inbuf[p + 1] == 0xD9) {
+            return (int)p;
         }
-        ptr--;
+        if (p == start) break;
     }
 
     if (cam_obj) cam_obj->debug.no_eoi_count++;

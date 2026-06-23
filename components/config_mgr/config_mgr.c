@@ -57,6 +57,18 @@ static void load_str(nvs_handle_t h, const char *key, char *dst, size_t dst_size
     }
 }
 
+/* PY260-supported framesizes only; excludes SVGA(11) and XGA(12) which
+ * mega_ccm.c does not handle. Shared by config_mgr_init() validation and the
+ * cam_resolution setter so bad values cannot enter from any call site. */
+static bool cam_res_is_valid(uint8_t v)
+{
+    static const uint8_t valid_res[] = {0, 1, 6, 7, 10, 13, 15, 16, 24};
+    for (size_t i = 0; i < sizeof(valid_res); i++) {
+        if (v == valid_res[i]) return true;
+    }
+    return false;
+}
+
 /* Load a u8 key; on ESP_ERR_NVS_NOT_FOUND use the fallback */
 static void load_u8(nvs_handle_t h, const char *key, uint8_t *dst, uint8_t fallback)
 {
@@ -114,12 +126,7 @@ esp_err_t config_mgr_init(void)
      * Reject values that mega_ccm.c does not handle — previously stored
      * values (e.g. 8=CIF, 9=HVGA from before the enum fix) would cause
      * esp_camera_init() to fail. Reset to default if invalid. */
-    static const uint8_t valid_res[] = {0, 1, 6, 7, 10, 13, 15, 16, 24}; // PY260-supported only; excludes SVGA(11) and XGA(12)
-    bool res_valid = false;
-    for (int i = 0; i < (int)sizeof(valid_res); i++) {
-        if (s_cam_res == valid_res[i]) { res_valid = true; break; }
-    }
-    if (!res_valid) {
+    if (!cam_res_is_valid(s_cam_res)) {
         ESP_LOGW(TAG, "cam_res=%u not supported by PY260 — resetting to VGA (%u)",
                  s_cam_res, DEFAULT_CAM_RES);
         s_cam_res = DEFAULT_CAM_RES;
@@ -153,8 +160,22 @@ void config_mgr_set_mqtt_user(const char *v)     { strlcpy(s_mqtt_user, v, sizeo
 void config_mgr_set_mqtt_pass(const char *v)     { strlcpy(s_mqtt_pass, v, sizeof(s_mqtt_pass)); }
 void config_mgr_set_device_id(const char *v)     { strlcpy(s_device_id, v, sizeof(s_device_id)); }
 void config_mgr_set_mqtt_enabled(bool v)         { s_mqtt_en = v; }
-void config_mgr_set_cam_resolution(uint8_t v)    { s_cam_res = v; }
-void config_mgr_set_jpeg_quality(uint8_t v)      { s_jpeg_qual = v; }
+void config_mgr_set_cam_resolution(uint8_t v)
+{
+    if (!cam_res_is_valid(v)) {
+        ESP_LOGW(TAG, "set_cam_resolution: %u not PY260-supported — ignoring", v);
+        return;
+    }
+    s_cam_res = v;
+}
+void config_mgr_set_jpeg_quality(uint8_t v)
+{
+    if (v < 1 || v > 63) {
+        ESP_LOGW(TAG, "set_jpeg_quality: %u out of range (1-63) — ignoring", v);
+        return;
+    }
+    s_jpeg_qual = v;
+}
 void config_mgr_set_ota_token(const char *v)     { strlcpy(s_ota_token, v, sizeof(s_ota_token)); }
 void config_mgr_set_coredump_token(const char *v) { strlcpy(s_cd_token,  v, sizeof(s_cd_token)); }
 
@@ -174,15 +195,23 @@ esp_err_t config_mgr_save(void)
         return err;
     }
 
-    nvs_set_str(h, KEY_MQTT_URL,  s_mqtt_url);
-    nvs_set_str(h, KEY_MQTT_USER, s_mqtt_user);
-    nvs_set_str(h, KEY_MQTT_PASS, s_mqtt_pass);
-    nvs_set_str(h, KEY_DEVICE_ID, s_device_id);
-    nvs_set_str(h, KEY_OTA_TOKEN, s_ota_token);
-    nvs_set_str(h, KEY_CD_TOKEN,  s_cd_token);
-    nvs_set_u8(h,  KEY_MQTT_EN,   s_mqtt_en ? 1 : 0);
-    nvs_set_u8(h,  KEY_CAM_RES,   s_cam_res);
-    nvs_set_u8(h,  KEY_JPEG_QUAL, s_jpeg_qual);
+    /* Abort on the first failed write so a half-updated config is never
+     * committed. nvs_set_* only stages values; commit makes them durable. */
+    err = nvs_set_str(h, KEY_MQTT_URL,  s_mqtt_url);
+    if (err == ESP_OK) err = nvs_set_str(h, KEY_MQTT_USER, s_mqtt_user);
+    if (err == ESP_OK) err = nvs_set_str(h, KEY_MQTT_PASS, s_mqtt_pass);
+    if (err == ESP_OK) err = nvs_set_str(h, KEY_DEVICE_ID, s_device_id);
+    if (err == ESP_OK) err = nvs_set_str(h, KEY_OTA_TOKEN, s_ota_token);
+    if (err == ESP_OK) err = nvs_set_str(h, KEY_CD_TOKEN,  s_cd_token);
+    if (err == ESP_OK) err = nvs_set_u8(h,  KEY_MQTT_EN,   s_mqtt_en ? 1 : 0);
+    if (err == ESP_OK) err = nvs_set_u8(h,  KEY_CAM_RES,   s_cam_res);
+    if (err == ESP_OK) err = nvs_set_u8(h,  KEY_JPEG_QUAL, s_jpeg_qual);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_set failed err=0x%x — aborting save without commit", err);
+        nvs_close(h);
+        return err;
+    }
 
     err = nvs_commit(h);
     nvs_close(h);

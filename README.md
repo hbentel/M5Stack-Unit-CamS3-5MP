@@ -282,16 +282,16 @@ cameras:
 > The `/stats` endpoint reports actual camera FPS — call it twice 5–10 s apart
 > for an accurate reading.
 
-### Image rotation
+### go2rtc restream (recommended)
 
-The physical camera orientation may require a 90° rotation. To rotate pixels
-(not just set metadata) add the camera to `go2rtc` and transcode via ffmpeg:
+Routing the camera through go2rtc enables Frigate's timeline/VOD playback
+(VOD requires HLS segments from go2rtc, not a direct MJPEG stream):
 
 ```yaml
 go2rtc:
   streams:
     unitcams3:
-      - "exec:ffmpeg -f mjpeg -i http://<device-ip>:81/stream -vf transpose=1 -c:v libx264 -preset ultrafast -tune zerolatency -f rtsp pipe:1"
+      - "ffmpeg:http://<device-ip>:81/stream#video=h264"
 
 cameras:
   unitcams3:
@@ -304,13 +304,10 @@ cameras:
             - detect
             - record
     detect:
-      width: 480   # swapped after 90° rotation
-      height: 640
+      width: 640
+      height: 480
       fps: 5
 ```
-
-`transpose=1` = 90° clockwise. Use `transpose=2` for counter-clockwise.
-Using `go2rtc` also enables Frigate's timeline/VOD playback for this camera.
 
 ---
 
