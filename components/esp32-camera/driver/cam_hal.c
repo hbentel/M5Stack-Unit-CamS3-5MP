@@ -99,6 +99,23 @@ static int cam_verify_jpeg_eoi(const uint8_t *inbuf, uint32_t length)
     return -1;
 }
 
+// Forward search for the first EOI (FF D9) in inbuf[from, length). Used for PSRAM
+// JPEG frames: the trailing partial DMA chunk also holds stale bytes from older
+// frames past the real end, so a backward search can latch onto an old EOI. FF D9
+// cannot occur inside entropy-coded data (FF is byte-stuffed), so the first one
+// after `from` is the real end of this frame.
+static int cam_find_jpeg_eoi_forward(const uint8_t *inbuf, uint32_t from, uint32_t length)
+{
+    if (length < 2) return -1;
+    for (uint32_t p = from; p + 1 < length; p++) {
+        if (inbuf[p] == 0xFF && inbuf[p + 1] == 0xD9) {
+            return (int)p;
+        }
+    }
+    if (cam_obj) cam_obj->debug.no_eoi_count++;
+    return -1;
+}
+
 static bool cam_get_next_frame(int * frame_pos)
 {
     if(!cam_obj->frames[*frame_pos].en){
@@ -268,9 +285,15 @@ static void cam_psram_jpeg_task(void)
             fb->len -= soi;
         }
 
-        // EOI scan — search the extended window (includes trailing partial DMA chunk)
+        // EOI scan — forward from the start of the last complete DMA chunk through
+        // the trailing partial chunk. Everything from there up to the real EOI is
+        // this frame's data; what follows it is stale data from older frames
+        // (measured: 15/20 frames carried 175-2287 stale bytes with the old
+        // backward search).
         size_t eoi_len = eoi_search_len - (size_t)(soi > 0 ? soi : 0);
-        int eoi = cam_verify_jpeg_eoi(fb->buf, eoi_len);
+        size_t eoi_from = (fb->len > cam_obj->dma_half_buffer_size + 2)
+                          ? fb->len - cam_obj->dma_half_buffer_size : 2;
+        int eoi = cam_find_jpeg_eoi_forward(fb->buf, eoi_from, eoi_len);
         if (eoi < 0) {
             // No EOI — drop frame, restore pointer, return to free pool
             cam_reset_and_free_frame(done.frame_pos);

@@ -13,6 +13,8 @@
 
 static const char *TAG = "wifi";
 static uint32_t s_disconnect_count = 0;
+// Per-reason disconnect counts (wifi_err_reason_t fits in a byte), exposed in /stats
+static uint16_t s_disconnect_reasons[256] = {0};
 
 // ========================================
 // Re-provisioning via RTC_NOINIT (same pattern as OTA URL)
@@ -69,6 +71,7 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         if (!s_provisioning_active) {
             wifi_event_sta_disconnected_t *evt = (wifi_event_sta_disconnected_t *)event_data;
             s_disconnect_count++;
+            s_disconnect_reasons[evt->reason & 0xFF]++;
             ESP_LOGW(TAG, "Disconnected (reason: %d). Retrying in 1s...", evt->reason);
             vTaskDelay(pdMS_TO_TICKS(1000));
             esp_wifi_connect();
@@ -84,6 +87,19 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         esp_wifi_disconnect();
         esp_wifi_connect();
     }
+}
+
+int wifi_get_disconnect_reasons_json(char *buf, size_t size)
+{
+    // {"<reason>":count,...} for every reason seen since boot
+    int pos = snprintf(buf, size, "{");
+    for (int r = 0; r < 256 && pos < (int)size - 16; r++) {  // keep room for one entry + '}'
+        if (s_disconnect_reasons[r]) {
+            pos += snprintf(buf + pos, size - pos, "%s\"%d\":%u", pos > 1 ? "," : "", r, s_disconnect_reasons[r]);
+        }
+    }
+    if (pos < (int)size) pos += snprintf(buf + pos, size - pos, "}");
+    return pos;
 }
 
 void wifi_get_stats(wifi_stats_t *stats)

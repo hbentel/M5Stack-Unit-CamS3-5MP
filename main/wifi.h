@@ -1,6 +1,8 @@
 #pragma once
 
 #include "esp_err.h"
+#include <stddef.h>
+#include <stdint.h>
 
 /**
  * @brief Initializes NVS, Wi-Fi, and blocks until an IP is acquired.
@@ -21,6 +23,12 @@ typedef struct {
 } wifi_stats_t;
 
 void wifi_get_stats(wifi_stats_t *stats);
+
+/**
+ * @brief Write disconnect counts per reason code since boot as a JSON object,
+ *        e.g. {"200":3,"8":1} (wifi_err_reason_t values). Returns bytes written.
+ */
+int wifi_get_disconnect_reasons_json(char *buf, size_t size);
 
 /**
  * @brief Erase Wi-Fi credentials and reboot into BLE provisioning.

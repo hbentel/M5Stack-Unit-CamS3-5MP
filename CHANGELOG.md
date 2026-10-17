@@ -9,6 +9,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Wi-Fi disconnect reasons in `/stats`** — `wifi.disconnect_reasons` counts
+  disconnects per `wifi_err_reason_t` since boot, to diagnose recurring drops.
 - **Effect control in Home Assistant** — `unitcams3/effect/set` (0–6, 3 = B&W),
   e.g. for night scenes with a strong colour cast.
 - **`/api/reg` sensor register debug endpoint** — read one register, dump up to
@@ -29,6 +31,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Stale bytes after the end of most frames** — the end-of-frame search ran
+  backward from one DMA chunk past the data and could stop at an end marker left
+  by an older frame, appending up to ~2 KB of junk (measured: 15 of 20 frames).
+  It now searches forward from the last complete chunk.
 - **A failed camera locked out remote recovery** — camera init failure halted boot
   before the HTTP servers and the OTA handler started, and MQTT commands were
   ignored without a sensor. Boot now continues without the camera and retries it

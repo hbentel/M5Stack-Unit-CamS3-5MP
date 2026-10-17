@@ -245,6 +245,9 @@ static esp_err_t stats_handler(httpd_req_t *req)
         }
     }
 
+    char reasons[160];
+    wifi_get_disconnect_reasons_json(reasons, sizeof(reasons));
+
     char *buf = heap_caps_malloc(1800, MALLOC_CAP_DEFAULT);
     if (!buf) {
         httpd_resp_send_500(req);
@@ -273,6 +276,7 @@ static esp_err_t stats_handler(httpd_req_t *req)
         "\"wifi\":{"
             "\"rssi\":%d,"
             "\"disconnects\":%lu,"
+            "\"disconnect_reasons\":%s,"
             "\"ip\":\"%s\""
         "},"
         "\"memory\":{"
@@ -303,7 +307,7 @@ static esp_err_t stats_handler(httpd_req_t *req)
         (unsigned long)cam.soi_offset_histogram[2], (unsigned long)cam.soi_offset_histogram[3],
         (unsigned long)cam.soi_offset_histogram[4], (unsigned long)cam.soi_offset_histogram[5],
         (unsigned long)cam.soi_offset_histogram[6], (unsigned long)cam.soi_offset_histogram[7],
-        wifi.rssi, (unsigned long)wifi.disconnect_count, wifi.ip,
+        wifi.rssi, (unsigned long)wifi.disconnect_count, reasons, wifi.ip,
         cur_internal, cur_psram,
         (min_internal == SIZE_MAX) ? cur_internal : min_internal,
         (min_psram    == SIZE_MAX) ? cur_psram    : min_psram,
