@@ -326,6 +326,14 @@ void app_main(void)
         ESP_LOGI(TAG, "MQTT disabled by config — skipping");
     }
 
+    // Register the MQTT OTA handler before the camera starts, so a firmware update
+    // can still be delivered remotely if camera init fails or hangs.
+    ESP_LOGI(TAG, "--- Initializing OTA Manager ---");
+    err = ota_mgr_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "OTA Manager init failed! Continuing...");
+    }
+
     /* Phase 1: Initialize Camera AFTER Wi-Fi/NVS are settled.
      * esp_camera_init() enables the VSYNC ISR (cam_start=1). If it runs
      * concurrently with Wi-Fi's NVS flash reads (which disable the OPI cache
@@ -336,16 +344,19 @@ void app_main(void)
     camera_config.frame_size = config_mgr_get_cam_resolution();
     s_cam_quality            = config_mgr_get_cam_quality();
     err = esp_camera_init(&camera_config);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Camera Init Failed! Error: 0x%x", err);
-        while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+    // Don't halt on failure: HTTP (logs, /health), MQTT restart and OTA must stay
+    // reachable so a dead sensor can be diagnosed and fixed remotely. The camera is
+    // retried after the servers are up.
+    bool camera_ok = (err == ESP_OK);
+    if (!camera_ok) {
+        ESP_LOGE(TAG, "Camera Init Failed! Error: 0x%x — continuing without camera, will retry", err);
+    } else {
+        apply_camera_settings(NULL);
     }
 
-    apply_camera_settings(NULL);
-
     // Prime DMA pipeline — Wi-Fi is fully connected, OPI bus is stable
-    ESP_LOGI(TAG, "--- Priming camera pipeline ---");
-    for (int attempt = 0; attempt < 4; attempt++) {
+    if (camera_ok) ESP_LOGI(TAG, "--- Priming camera pipeline ---");
+    for (int attempt = 0; camera_ok && attempt < 4; attempt++) {
         camera_fb_t *fb = esp_camera_fb_get();
         if (fb) {
             ESP_LOGI(TAG, "Warmup frame captured (%zu bytes, attempt %d)", fb->len, attempt + 1);
@@ -422,14 +433,17 @@ void app_main(void)
         ESP_LOGE(TAG, "Stream Server failed to start! Continuing...");
     }
 
-    ESP_LOGI(TAG, "--- Initializing OTA Manager ---");
-    err = ota_mgr_init();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "OTA Manager init failed! Continuing...");
-    }
-
     ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "  SYSTEM READY");
+    ESP_LOGI(TAG, "  SYSTEM READY%s", camera_ok ? "" : " (CAMERA FAILED — retrying)");
     ESP_LOGI(TAG, "  HTTP: port 80  |  Stream: port 81");
     ESP_LOGI(TAG, "========================================");
+
+    // Camera failed at boot: keep retrying (hardware reset + init) in this task.
+    // A sensor whose control bus is hung may need a power cycle; the error stays
+    // visible in /api/logs meanwhile.
+    for (int attempt = 1; !camera_ok; attempt++) {
+        vTaskDelay(pdMS_TO_TICKS(30000));
+        ESP_LOGW(TAG, "Camera init retry %d...", attempt);
+        camera_ok = (camera_reinit() == ESP_OK);
+    }
 }

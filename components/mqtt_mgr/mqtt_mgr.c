@@ -224,8 +224,9 @@ void mqtt_mgr_publish_camera_state(void)
 
 static void handle_command(const char *topic_ptr, int topic_len, const char *data, int data_len)
 {
+    // Only the image controls need the camera; restart, reprovision, OTA, LED and
+    // fps cap must keep working when the sensor failed to initialize.
     sensor_t *s = esp_camera_sensor_get();
-    if (!s) return;
 
     // Safety copy of topic and data
     char topic[128];
@@ -246,19 +247,19 @@ static void handle_command(const char *topic_ptr, int topic_len, const char *dat
 
     // Image controls: publish the level the sensor recorded rather than echoing
     // the payload, so clamped or rejected values don't desync Home Assistant.
-    if (strstr(topic, "brightness/set")) {
+    if (strstr(topic, "brightness/set") && s) {
         if (s->set_brightness) s->set_brightness(s, val);
         mqtt_mgr_publish_camera_state();
-    } else if (strstr(topic, "contrast/set")) {
+    } else if (strstr(topic, "contrast/set") && s) {
         if (s->set_contrast) s->set_contrast(s, val);
         mqtt_mgr_publish_camera_state();
-    } else if (strstr(topic, "saturation/set")) {
+    } else if (strstr(topic, "saturation/set") && s) {
         if (s->set_saturation) s->set_saturation(s, val);
         mqtt_mgr_publish_camera_state();
-    } else if (strstr(topic, "wb_mode/set")) {
+    } else if (strstr(topic, "wb_mode/set") && s) {
         if (s->set_wb_mode) s->set_wb_mode(s, val);
         mqtt_mgr_publish_camera_state();
-    } else if (strstr(topic, "effect/set")) {
+    } else if (strstr(topic, "effect/set") && s) {
         if (val >= 0 && val <= 6 && s->set_special_effect) s->set_special_effect(s, val);
         mqtt_mgr_publish_camera_state();
     } else if (strstr(topic, "ota/set")) {
@@ -390,7 +391,7 @@ static void mqtt_telemetry_task(void *arg)
             esp_mqtt_client_publish(client, topic, payload, 0, 0, 0);
 
             // Camera stats: FPS + NO-SOI
-            cam_stats_t cam;
+            cam_stats_t cam = {0};  // stays zeroed if the camera is not initialized
             esp_camera_get_stats(&cam);
             int64_t now = esp_timer_get_time();
             if (last_stats_time > 0) {

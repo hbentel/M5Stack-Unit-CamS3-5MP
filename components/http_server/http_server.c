@@ -211,7 +211,7 @@ static esp_err_t stats_handler(httpd_req_t *req)
     static size_t min_internal = SIZE_MAX;
     static size_t min_psram = SIZE_MAX;
 
-    cam_stats_t cam;
+    cam_stats_t cam = {0};  // stays zeroed if the camera is not initialized
     wifi_stats_t wifi;
     esp_camera_get_stats(&cam);
     wifi_get_stats(&wifi);

@@ -29,6 +29,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A failed camera locked out remote recovery** — camera init failure halted boot
+  before the HTTP servers and the OTA handler started, and MQTT commands were
+  ignored without a sensor. Boot now continues without the camera and retries it
+  every 30 s; the OTA handler is registered before camera init; restart,
+  reprovision, OTA, LED and fps-cap commands work without a camera.
 - **Camera ran single-buffered (driver buffer leak)** — `cam_reset_and_free_frame()`
   treated "no free buffer" as "ISR stalled" and re-armed capture from task context
   even while a capture was in progress, hijacking the GDMA and orphaning the buffer
