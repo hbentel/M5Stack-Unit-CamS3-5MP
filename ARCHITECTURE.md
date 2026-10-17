@@ -81,6 +81,15 @@ code path produced truncated frames; the current path is the one that has run in
 production. Until 2026-10-16 a recovery-path bug in `cam_reset_and_free_frame()`
 stranded 3 of the 4 buffers, so the camera effectively ran single-buffered.
 
+### Sensor clock registers do nothing (tested 2026-10-17)
+
+Espressif's upstream `mega_ccm` driver writes `SYSTEM_CLK_DIV` (`0x0200`) and
+`SYSTEM_PLL_DIV` (`0x0201`) after each resolution change. On this module (firmware
+version 1) both read back `0xFF`, and neither live writes nor writes at camera init
+(right after the resolution, as upstream does) changed the frame rate: div/pll of
+2/1, 1/1, 2/2, 8/1 and 0/0 all gave 9.37–9.43 fps at VGA with clean frames. The
+frame rate is set inside the module.
+
 ### `SPIRAM_FETCH_INSTRUCTIONS` and `SPIRAM_RODATA` must stay disabled
 
 Placing code or read-only data in PSRAM competes with camera DMA on the OPI bus.
