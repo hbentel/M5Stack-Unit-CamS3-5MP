@@ -1,16 +1,32 @@
 #include "recovery_mgr.h"
 #include "esp_log.h"
 #include "esp_attr.h"
-#include "nvs_flash.h"
-#include "nvs.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_ota_ops.h"
 
 static const char *TAG = "recovery";
 
-#define PLANNED_REBOOT_MAGIC 0xC0DEABC1UL
+/*
+ * Crash-loop detection without flash writes.
+ *
+ * Every flash write disables the OPI PSRAM cache, and doing one after Wi-Fi starts
+ * has crashed this device, so the boot counter lives in RTC_NOINIT memory instead
+ * of NVS. RTC_NOINIT survives panics, watchdog resets and esp_restart() (but not
+ * power-on), which is exactly the set of resets a crash loop produces.
+ *
+ * A boot counts as a crash if the reset reason is a panic/watchdog, or if the
+ * previous boot restarted itself via recovery_mgr_report_error() escalation.
+ * recovery_mgr_mark_stable() (called after a stable period) clears the count.
+ */
+#define RTC_MAGIC                 0x5AFE600DUL
+#define PLANNED_REBOOT_MAGIC      0xC0DEABC1UL
+#define ERROR_RESTART_MAGIC       0xE5505A1EUL
+
+static RTC_NOINIT_ATTR uint32_t s_rtc_magic;
+static RTC_NOINIT_ATTR uint32_t s_crash_count;
 static RTC_NOINIT_ATTR uint32_t s_planned_reboot_magic;
+static RTC_NOINIT_ATTR uint32_t s_error_restart_magic;
 
 void recovery_mgr_signal_planned_reboot(void)
 {
@@ -37,57 +53,74 @@ esp_err_t recovery_mgr_init(const recovery_config_t *config)
         s_config = *config;
     }
 
-    // Open NVS
-    nvs_handle_t nvs_h;
-    esp_err_t err = nvs_open("recovery", NVS_READWRITE, &nvs_h);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to open NVS");
-        return err;
-    }
-
-    // Check Boot Loop
-    int32_t boot_count = 0;
-    nvs_get_i32(nvs_h, "boot_count", &boot_count);
-
-    if (s_planned_reboot_magic == PLANNED_REBOOT_MAGIC) {
+    if (s_rtc_magic != RTC_MAGIC) {      // power-on: RTC_NOINIT holds garbage
+        s_rtc_magic = RTC_MAGIC;
+        s_crash_count = 0;
         s_planned_reboot_magic = 0;
-        boot_count = 0;
-        ESP_LOGI(TAG, "Planned reboot — boot counter reset");
+        s_error_restart_magic = 0;
     }
 
-    boot_count++;
-    nvs_set_i32(nvs_h, "boot_count", boot_count);
-    nvs_commit(nvs_h);
+    esp_reset_reason_t rr = esp_reset_reason();
+    bool planned = (s_planned_reboot_magic == PLANNED_REBOOT_MAGIC);
+    bool crashed = !planned && (rr == ESP_RST_PANIC || rr == ESP_RST_INT_WDT ||
+                                rr == ESP_RST_TASK_WDT || rr == ESP_RST_WDT ||
+                                s_error_restart_magic == ERROR_RESTART_MAGIC);
+    s_planned_reboot_magic = 0;
+    s_error_restart_magic = 0;
 
-    ESP_LOGI(TAG, "Boot count: %ld", (long)boot_count);
+    if (crashed) {
+        s_crash_count++;
+    } else if (rr == ESP_RST_POWERON) {
+        s_crash_count = 0;
+    }
+    // Other non-crash resets (planned software restarts) keep the count: they
+    // happen after mark_stable() would normally have cleared it.
 
-    if (s_config.enable_safe_mode && boot_count >= s_config.bootloop_threshold) {
-        ESP_LOGE(TAG, "BOOT LOOP DETECTED (%ld boots)! Entering Safe Mode.", (long)boot_count);
+    ESP_LOGI(TAG, "Reset reason %d, consecutive crash boots: %lu", (int)rr, (unsigned long)s_crash_count);
+
+    if (s_config.enable_safe_mode && s_crash_count >= (uint32_t)s_config.bootloop_threshold) {
+        ESP_LOGE(TAG, "CRASH LOOP DETECTED (%lu crash boots) — entering safe mode", (unsigned long)s_crash_count);
         s_safe_mode = true;
     }
 
-    // Confirm OTA validity and reset the boot counter now, before Wi-Fi starts.
-    // esp_ota_mark_app_valid_cancel_rollback() and nvs_commit() are flash writes
-    // that disable the OPI PSRAM cache; any task concurrently touching
-    // cache-mapped memory during that window double-faults the CPU (see CLAUDE.md
-    // flash-write safety rule). This used to run ~2 minutes into boot, after
-    // Wi-Fi/MQTT were already active and the camera was streaming — confirmed via
-    // coredump that Wi-Fi's own task was the concurrent victim every time, even
-    // with the camera not yet initialized. This exact point, before Wi-Fi starts,
-    // is the only one that's been flash-write-safe for the project's entire
-    // history (the boot_count write above runs here too). Skipped when a boot
-    // loop is detected so a genuinely bad OTA image still gets rolled back by the
-    // bootloader's native pending-verify mechanism instead of being confirmed.
-    if (!s_safe_mode) {
-        esp_ota_mark_app_valid_cancel_rollback();
-        nvs_set_i32(nvs_h, "boot_count", 0);
-        nvs_commit(nvs_h);
-        ESP_LOGI(TAG, "OTA rollback cancelled, boot counter reset.");
+    if (recovery_mgr_image_pending()) {
+        ESP_LOGW(TAG, "Running a new OTA image (pending verify): it will be confirmed after a "
+                      "stable period; a crash or reboot before then rolls back to the previous image");
     }
-
-    nvs_close(nvs_h);
-
     return ESP_OK;
+}
+
+bool recovery_mgr_image_pending(void)
+{
+    esp_ota_img_states_t state;
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    return running && esp_ota_get_state_partition(running, &state) == ESP_OK &&
+           state == ESP_OTA_IMG_PENDING_VERIFY;
+}
+
+esp_err_t recovery_mgr_confirm_image(void)
+{
+    // Flash write: the caller must have stopped Wi-Fi and the camera first.
+    esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "New firmware confirmed — rollback cancelled");
+    } else {
+        ESP_LOGE(TAG, "Confirming firmware failed: %s", esp_err_to_name(err));
+    }
+    return err;
+}
+
+void recovery_mgr_mark_stable(void)
+{
+    if (s_crash_count) {
+        ESP_LOGI(TAG, "Stable — clearing crash-boot count (%lu)", (unsigned long)s_crash_count);
+    }
+    s_crash_count = 0;
+}
+
+uint32_t recovery_mgr_get_crash_count(void)
+{
+    return s_crash_count;
 }
 
 void recovery_mgr_report_error(recovery_error_t error)
@@ -111,6 +144,7 @@ void recovery_mgr_report_error(recovery_error_t error)
 
             if (s_config.enable_reboot) {
                 ESP_LOGE(TAG, "Triggering System Restart.");
+                s_error_restart_magic = ERROR_RESTART_MAGIC;  // counts as a crash boot
                 esp_restart();
             }
         }

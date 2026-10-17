@@ -124,7 +124,7 @@ Base topic: `unitcams3`
 2. Next boot: `ota_mgr_run_pending()` called from `main.c` after Wi-Fi, **before** `esp_camera_init()`
 3. If URL found in RTC RAM (integrity check passes): validates magic byte (0xE9), downloads full firmware to PSRAM buffer, verifies SHA-256 (if provided), validates content_length, flashes, reboots
 4. If OTA fails: RTC RAM cleared (no boot loop), normal boot continues — retrigger via MQTT
-5. On success: reboots into new firmware; `recovery_mgr_init()` calls `esp_ota_mark_app_valid_cancel_rollback()` immediately, before Wi-Fi starts (the only flash-write-safe window — see Flash-write safety rule below)
+5. On success: reboots into new firmware, which stays PENDING_VERIFY for 120 s (a crash or reboot in that window rolls back). Then `confirm_ota_image()` in `main.c` pauses camera users, deinits the camera, stops Wi-Fi, calls `esp_ota_mark_app_valid_cancel_rollback()`, and restarts both (~10 s stream gap, once per OTA). Crash loops are counted in RTC memory (no flash write); 3 in a row = safe mode (camera off, HTTP/MQTT/OTA up).
 
 **Protections:**
 - Token auth: if `CONFIG_UNITCAMS3_OTA_TOKEN` is set (or configured via `/setup`), the MQTT payload must be JSON `{"url":"...","token":"<token>"}` — bare URL strings are rejected

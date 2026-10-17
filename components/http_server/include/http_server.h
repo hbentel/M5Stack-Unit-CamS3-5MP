@@ -1,6 +1,8 @@
 #pragma once
 
 #include "esp_err.h"
+#include <stdbool.h>
+#include <stdint.h>
 #include "esp_http_server.h"
 
 #ifdef __cplusplus
@@ -37,6 +39,11 @@ uint32_t http_server_get_reinit_count(void);
 // Set broadcaster FPS cap (0 = unlimited, 1-15 = max fps delivered to clients).
 // Takes effect immediately. Not persisted across reboot.
 void http_server_set_fps_cap(uint8_t fps_cap);
+
+// Pause/resume camera use by the broadcaster and snapshot handler, so the camera
+// can be deinitialized safely. Poll http_server_camera_idle() after pausing.
+void http_server_pause_camera(bool pause);
+bool http_server_camera_idle(void);
 
 #ifdef __cplusplus
 }

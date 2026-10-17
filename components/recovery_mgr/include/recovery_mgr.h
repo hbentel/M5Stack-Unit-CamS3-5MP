@@ -2,6 +2,7 @@
 
 #include "esp_err.h"
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,7 +26,9 @@ typedef struct {
 
 /**
  * @brief Initialize the Recovery Manager.
- * Checks NVS for boot loops and sets safe mode if needed.
+ * Counts consecutive crash boots in RTC memory (no flash write) and enters safe
+ * mode at the threshold. Does NOT confirm a new OTA image — see
+ * recovery_mgr_confirm_image().
  */
 esp_err_t recovery_mgr_init(const recovery_config_t *config);
 
@@ -52,6 +55,21 @@ int recovery_mgr_get_error_count(void);
  * Must be called before esp_restart().
  */
 void recovery_mgr_signal_planned_reboot(void);
+
+/** @brief True if the running image is a new OTA image awaiting confirmation. */
+bool recovery_mgr_image_pending(void);
+
+/**
+ * @brief Confirm the running OTA image (cancels rollback). This is a FLASH WRITE:
+ *        the caller must stop Wi-Fi and the camera first.
+ */
+esp_err_t recovery_mgr_confirm_image(void);
+
+/** @brief Mark the system stable: clears the consecutive crash-boot count. */
+void recovery_mgr_mark_stable(void);
+
+/** @brief Consecutive crash boots counted so far (RTC memory). */
+uint32_t recovery_mgr_get_crash_count(void);
 
 #ifdef __cplusplus
 }

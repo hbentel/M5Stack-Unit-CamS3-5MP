@@ -22,6 +22,7 @@
 #include "mdns.h"
 #include "log_buf.h"
 #include "nvs_flash.h"
+#include "esp_wifi.h"
 
 // 10MHz: hard ceiling — PY260 front porch too short at 16/20MHz regardless of ISR weight
 #define CAM_XCLK_FREQ_HZ 10000000
@@ -143,6 +144,11 @@ static void apply_camera_settings(const camera_status_t *keep)
 
 SemaphoreHandle_t g_camera_reinit_mutex = NULL;
 
+// Levels to restore on the next camera_reinit() when the camera was deinitialized
+// on purpose beforehand (so there is no live sensor status to copy).
+static camera_status_t s_pending_restore;
+static bool s_pending_restore_valid = false;
+
 // LED wrapper — passed to mqtt_mgr as a callback so mqtt_mgr doesn't need esp_driver_gpio
 static void led_set_level(int level)
 {
@@ -170,7 +176,11 @@ esp_err_t camera_reinit(void)
     if (old) {
         prev = old->status;
         have_prev = true;
+    } else if (s_pending_restore_valid) {
+        prev = s_pending_restore;
+        have_prev = true;
     }
+    s_pending_restore_valid = false;
     esp_camera_deinit();
     vTaskDelay(pdMS_TO_TICKS(100));
 
@@ -202,6 +212,37 @@ esp_err_t camera_reinit(void)
     ESP_LOGI(TAG, "Camera reinit successful");
     xSemaphoreGive(g_camera_reinit_mutex);
     return ESP_OK;
+}
+
+// One-time confirmation of a freshly OTA'd image after it has run stably. This is
+// a flash write (otadata), which is only safe with nothing touching cache-mapped
+// memory: pause camera users, deinit the camera, stop Wi-Fi, write, then bring
+// everything back. Costs Frigate one ~5-10 s gap, once per OTA.
+static void confirm_ota_image(void)
+{
+    ESP_LOGW(TAG, "Confirming new firmware: pausing camera and Wi-Fi for the flash write");
+    http_server_pause_camera(true);
+    for (int i = 0; i < 100 && !http_server_camera_idle(); i++) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+
+    xSemaphoreTake(g_camera_reinit_mutex, portMAX_DELAY);
+    sensor_t *s = esp_camera_sensor_get();
+    if (s) {
+        s_pending_restore = s->status;      // camera_reinit() below restores these levels
+        s_pending_restore_valid = true;
+    }
+    esp_camera_deinit();
+    esp_wifi_stop();
+    vTaskDelay(pdMS_TO_TICKS(200));        // let the Wi-Fi driver quiesce (as in ota_mgr)
+
+    recovery_mgr_confirm_image();
+
+    esp_wifi_start();                       // STA_START handler reconnects
+    xSemaphoreGive(g_camera_reinit_mutex);
+
+    camera_reinit();
+    http_server_pause_camera(false);
 }
 
 void app_main(void)
@@ -275,10 +316,9 @@ void app_main(void)
     ESP_LOGI(TAG, "  Phase 2: Network & Services");
     ESP_LOGI(TAG, "========================================");
 
-    // Recovery manager writes NVS (nvs_commit) — must run BEFORE Wi-Fi and MQTT
-    // are started. nvs_commit disables the OPI PSRAM cache; any concurrent PSRAM
-    // access by Wi-Fi/MQTT tasks causes ExcCause=7 → crash. Running it here, while
-    // no PSRAM-accessing tasks are alive, is safe.
+    // Recovery manager: counts crash boots in RTC memory (no flash write) and decides
+    // safe mode. A new OTA image is confirmed later, after a stable period (see the
+    // supervision loop at the end of app_main).
     ESP_LOGI(TAG, "--- Starting Recovery Manager ---");
     err = recovery_mgr_init(NULL); // Use defaults
     if (err != ESP_OK) {
@@ -343,7 +383,15 @@ void app_main(void)
     ESP_LOGI(TAG, "--- Initializing Camera Driver ---");
     camera_config.frame_size = config_mgr_get_cam_resolution();
     s_cam_quality            = config_mgr_get_cam_quality();
-    err = esp_camera_init(&camera_config);
+    bool safe_mode = recovery_mgr_is_safe_mode();
+    if (safe_mode) {
+        // Repeated crash boots: the camera is the most likely culprit. Leave it off so
+        // HTTP (logs, coredump), MQTT and OTA stay up for a remote fix.
+        ESP_LOGE(TAG, "SAFE MODE — camera not started (power-cycle or OTA to recover)");
+        err = ESP_FAIL;
+    } else {
+        err = esp_camera_init(&camera_config);
+    }
     // Don't halt on failure: HTTP (logs, /health), MQTT restart and OTA must stay
     // reachable so a dead sensor can be diagnosed and fixed remotely. The camera is
     // retried after the servers are up.
@@ -438,12 +486,33 @@ void app_main(void)
     ESP_LOGI(TAG, "  HTTP: port 80  |  Stream: port 81");
     ESP_LOGI(TAG, "========================================");
 
-    // Camera failed at boot: keep retrying (hardware reset + init) in this task.
-    // A sensor whose control bus is hung may need a power cycle; the error stays
-    // visible in /api/logs meanwhile.
-    for (int attempt = 1; !camera_ok; attempt++) {
-        vTaskDelay(pdMS_TO_TICKS(30000));
-        ESP_LOGW(TAG, "Camera init retry %d...", attempt);
-        camera_ok = (camera_reinit() == ESP_OK);
+    // Post-boot supervision (this task):
+    //  - camera failed at boot (not safe mode): retry every 30 s. A sensor whose
+    //    control bus is hung may need a power cycle; the error stays in /api/logs.
+    //  - after STABLE_AFTER_S of uptime: clear the crash-boot count and, if this is
+    //    a new OTA image, confirm it (until then a crash or reboot rolls back).
+    #define STABLE_AFTER_S 120
+    bool stable = false;
+    for (int t = 1; !stable || (!camera_ok && !safe_mode); t++) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        if (!camera_ok && !safe_mode && t % 30 == 0) {
+            ESP_LOGW(TAG, "Camera init retry %d...", t / 30);
+            camera_ok = (camera_reinit() == ESP_OK);
+        }
+        if (!stable && t >= STABLE_AFTER_S) {
+            stable = true;
+            recovery_mgr_mark_stable();
+            if (recovery_mgr_image_pending()) {
+                if (camera_ok) {
+                    confirm_ota_image();
+                } else {
+                    // No camera to pause; Wi-Fi still must be stopped for the write.
+                    esp_wifi_stop();
+                    vTaskDelay(pdMS_TO_TICKS(200));
+                    recovery_mgr_confirm_image();
+                    esp_wifi_start();
+                }
+            }
+        }
     }
 }

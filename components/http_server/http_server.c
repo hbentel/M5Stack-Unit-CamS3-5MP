@@ -65,6 +65,23 @@ static _Atomic uint32_t s_oversize_drops = 0;   // frames larger than a frame_po
 static _Atomic uint32_t s_wrong_size_reinits = 0; // reinits because the sensor reverted its resolution
 static uint32_t s_broadcaster_hwm_words = 0;    // broadcaster stack HWM, updated every 100 frames
 
+// Camera pause (e.g. for the one-time OTA image confirmation flash write): while
+// set, the broadcaster and snapshot handler stay away from the camera so it can
+// be deinitialized safely. s_broadcaster_idle acknowledges the pause.
+static volatile bool s_camera_paused = false;
+static volatile bool s_broadcaster_idle = true;
+
+void http_server_pause_camera(bool pause)
+{
+    if (pause) s_broadcaster_idle = false;
+    s_camera_paused = pause;
+}
+
+bool http_server_camera_idle(void)
+{
+    return !s_broadcaster_task_handle || s_broadcaster_idle;
+}
+
 /// FPS cap: 0 = unlimited, 1-15 = max frames/sec delivered to stream clients
 static _Atomic uint8_t s_fps_cap = 0;
 
@@ -86,7 +103,7 @@ static esp_err_t capture_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "Snapshot requested");
 
-    if (s_ota_pending) {
+    if (s_ota_pending || s_camera_paused) {
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
@@ -358,6 +375,11 @@ static void mjpeg_broadcaster_task(void *arg)
     while (1) {
         esp_task_wdt_reset();
         if (s_ota_pending) goto broadcaster_exit;
+        if (s_camera_paused) {
+            s_broadcaster_idle = true;   // not inside esp_camera_fb_get()
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
 
         // Check for active clients before capturing
         bool has_clients = false;

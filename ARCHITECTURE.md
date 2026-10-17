@@ -192,25 +192,27 @@ Next boot:
     → esp_ota_begin() → flash loop (4 KB internal SRAM staging buffer) → esp_ota_end()
     → esp_ota_set_boot_partition() → esp_restart()
 
-First boot of the new image (and every boot):
-    → recovery_mgr_init(), before Wi-Fi starts (the only flash-write-safe window)
-    → esp_ota_mark_app_valid_cancel_rollback()
+First boot of the new image (state PENDING_VERIFY):
+    → runs normally; a crash or any reboot in the first 120 s → bootloader rolls back
+    → at 120 s stable: pause camera users, deinit camera, esp_wifi_stop()
+    → esp_ota_mark_app_valid_cancel_rollback() (the only flash write after boot)
+    → esp_wifi_start(), camera_reinit() — one ~10 s stream gap, once per OTA
 ```
 
 ---
 
 ## Recovery Manager: Boot-Loop Detection
 
-The recovery manager increments an NVS `boot_count` on every boot. Since v0.2.7 it
-also marks the running image valid and resets `boot_count` to 0 during the same
-early-boot call, because flash writes are only safe before Wi-Fi starts (the old
-2-minute health timer crashed the device).
+Consecutive crash boots (panic, watchdog, or a `recovery_mgr_report_error()`
+escalation restart) are counted in `RTC_NOINIT` memory — no flash write; it
+survives every reset a crash loop produces and clears on power-on. Three in a row
+enters **safe mode**: the camera is not started, while HTTP (logs, coredump), MQTT
+and OTA stay up for a remote fix. 120 s of stable uptime clears the count.
 
-**Known limitation:** because the counter is reset on every boot, it can never
-reach the boot-loop threshold, and because the image is confirmed before Wi-Fi,
-camera or MQTT start, an OTA image that crashes later in boot is *not* rolled
-back. `recovery_mgr_is_safe_mode()` is also not consulted anywhere, so safe mode
-would not suppress services even if it triggered.
+A new OTA image is confirmed only after those 120 s (see the OTA flow above), so a
+bad image that crashes during or after boot is rolled back by the bootloader.
+**Caveat:** any reboot inside that window — including an MQTT restart or a
+`/setup` save — also rolls back, so wait 2 minutes after an OTA before rebooting.
 
 **Planned reboot signalling:** OTA triggers and MQTT restart commands call
 `recovery_mgr_signal_planned_reboot()` before `esp_restart()`. This writes a
@@ -231,7 +233,7 @@ the flag — preventing deliberate reboots from tripping the boot-loop threshold
 | `log_buf/` | 16 KB PSRAM ring buffer hooked into `esp_log_set_vprintf()`; exposes `log_buf_snapshot()` for `/api/logs` |
 | `mqtt_mgr/` | MQTT client, HA auto-discovery, telemetry every 10 s, command handling |
 | `ota_mgr/` | URL-based OTA via MQTT, RTC NOINIT URL storage, OTA callback registration |
-| `recovery_mgr/` | NVS boot counter, OTA image confirmation (pre-Wi-Fi), planned-reboot signalling |
+| `recovery_mgr/` | RTC crash-boot counter + safe mode, deferred OTA image confirmation, planned-reboot signalling |
 
 ---
 

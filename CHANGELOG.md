@@ -31,6 +31,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **OTA rollback and crash-loop detection were inert since v0.2.7** — the image was
+  confirmed and the NVS boot counter reset on every boot before Wi-Fi started, so
+  a bad OTA image never rolled back and the boot-loop threshold was unreachable;
+  safe mode was never consulted. Now: crash boots are counted in RTC memory (no
+  flash write), 3 in a row = safe mode (camera off, HTTP/MQTT/OTA up); a new image
+  stays pending for 120 s and is then confirmed with camera and Wi-Fi briefly
+  stopped (verified on device: ~10 s stream gap, once per OTA). Caveat: rebooting
+  within 2 minutes of an OTA rolls back.
 - **Stale bytes after the end of most frames** — the end-of-frame search ran
   backward from one DMA chunk past the data and could stop at an end marker left
   by an older frame, appending up to ~2 KB of junk (measured: 15 of 20 frames).
