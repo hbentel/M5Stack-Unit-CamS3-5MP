@@ -61,6 +61,33 @@ static int write_reg(uint8_t slv_addr, const uint16_t reg, uint8_t value)
     return ret;
 }
 
+/* Write an image-control register and confirm it took, retrying until it does.
+ * Measured on device: writes issued shortly after a sensor reset (boot or
+ * camera_reinit) are ACKed on the bus but silently ignored by the module — the
+ * white balance register read back Auto after the firmware wrote Office — while
+ * the same write a minute later sticks. Only use for registers that read back
+ * their value (0x0120-0x0127, 0x012A); others read 0xFF.
+ * The resolution write is affected too: one boot streamed 320x240 while the
+ * firmware believed it had set VGA. */
+#define VERIFY_ATTEMPTS  20
+#define VERIFY_RETRY_MS  100
+
+static int write_reg_verified(uint8_t slv_addr, const uint16_t reg, uint8_t value)
+{
+    for (int attempt = 1; attempt <= VERIFY_ATTEMPTS; attempt++) {
+        if (write_reg(slv_addr, reg, value) == 0 && read_reg(slv_addr, reg) == value) {
+            if (attempt > 1) {
+                ESP_LOGW(TAG, "reg 0x%04x=0x%02x took %d attempts", reg, value, attempt);
+            }
+            return 0;
+        }
+        vTaskDelay(pdMS_TO_TICKS(VERIFY_RETRY_MS));
+    }
+    ESP_LOGE(TAG, "reg 0x%04x=0x%02x did not stick after %d attempts (reads 0x%02x)",
+             reg, value, VERIFY_ATTEMPTS, read_reg(slv_addr, reg) & 0xFF);
+    return -1;
+}
+
 
 static void print_regs(uint8_t slv_addr)
 {
@@ -132,7 +159,7 @@ static int set_pixformat(sensor_t *sensor, pixformat_t pixformat)
         ESP_LOGE(TAG, "Only PIXFORMAT_JPEG is supported! Requested: %u", pixformat);
         return -1;
     }
-    ret = write_reg(sensor->slv_addr, PIXEL_FMT_REG, 0x01); //JPEG
+    ret = write_reg_verified(sensor->slv_addr, PIXEL_FMT_REG, 0x01); //JPEG
     if (ret == 0) {
         sensor->pixformat = PIXFORMAT_JPEG;
         ESP_LOGD(TAG, "Set pixformat to JPEG");
@@ -151,23 +178,23 @@ static int set_framesize(sensor_t *sensor, framesize_t framesize)
     uint16_t h = resolution[framesize].height;
     
    if(framesize == FRAMESIZE_QVGA){   //320x240
-        ret = write_reg(sensor->slv_addr, RESOLUTION_REG, 0x01);
+        ret = write_reg_verified(sensor->slv_addr, RESOLUTION_REG, 0x01);
     }else if(framesize == FRAMESIZE_VGA){   //640x480
-        ret = write_reg(sensor->slv_addr, RESOLUTION_REG, 0x02);
+        ret = write_reg_verified(sensor->slv_addr, RESOLUTION_REG, 0x02);
     }else if(framesize == FRAMESIZE_HD){   //1280x720
-        ret = write_reg(sensor->slv_addr, RESOLUTION_REG, 0x03);
+        ret = write_reg_verified(sensor->slv_addr, RESOLUTION_REG, 0x03);
     }else if(framesize == FRAMESIZE_UXGA){   //1600x1200
-        ret = write_reg(sensor->slv_addr, RESOLUTION_REG, 0x04);
+        ret = write_reg_verified(sensor->slv_addr, RESOLUTION_REG, 0x04);
     }else if(framesize == FRAMESIZE_FHD){   //1920x1080
-        ret = write_reg(sensor->slv_addr, RESOLUTION_REG, 0x05);
+        ret = write_reg_verified(sensor->slv_addr, RESOLUTION_REG, 0x05);
     }else if(framesize == FRAMESIZE_5MP){   //2592x1944
-        ret = write_reg(sensor->slv_addr, RESOLUTION_REG, 0x06);
+        ret = write_reg_verified(sensor->slv_addr, RESOLUTION_REG, 0x06);
     }else if (framesize == FRAMESIZE_96X96){  //96x96
-        ret = write_reg(sensor->slv_addr, RESOLUTION_REG, 0x07);
+        ret = write_reg_verified(sensor->slv_addr, RESOLUTION_REG, 0x07);
     }else if(framesize == FRAMESIZE_128x128){  //128x128
-        ret = write_reg(sensor->slv_addr, RESOLUTION_REG, 0x08);
+        ret = write_reg_verified(sensor->slv_addr, RESOLUTION_REG, 0x08);
     }else if(framesize == FRAMESIZE_320x320){  //320x320
-        ret = write_reg(sensor->slv_addr, RESOLUTION_REG, 0x09);
+        ret = write_reg_verified(sensor->slv_addr, RESOLUTION_REG, 0x09);
     }else{
         ESP_LOGE(TAG, "Unsupported framesize for PY260: %u", framesize);
         ret = -1;
@@ -188,31 +215,31 @@ static int set_brightness(sensor_t *sensor, int level)
     }
     switch (level) {
     case brightness_0:
-       ret = write_reg(sensor->slv_addr, BRIGHTNESS_REG, 0x08); //-4
+       ret = write_reg_verified(sensor->slv_addr, BRIGHTNESS_REG, 0x08); //-4
         break;  
     case brightness_1:
-        ret = write_reg(sensor->slv_addr, BRIGHTNESS_REG, 0x06); //-3
+        ret = write_reg_verified(sensor->slv_addr, BRIGHTNESS_REG, 0x06); //-3
         break;
     case brightness_2:
-        ret = write_reg(sensor->slv_addr, BRIGHTNESS_REG, 0x04); //-2
+        ret = write_reg_verified(sensor->slv_addr, BRIGHTNESS_REG, 0x04); //-2
         break;
     case brightness_3:
-        ret = write_reg(sensor->slv_addr, BRIGHTNESS_REG, 0x02); //-1  
+        ret = write_reg_verified(sensor->slv_addr, BRIGHTNESS_REG, 0x02); //-1  
         break;
     case brightness_4:
-         ret = write_reg(sensor->slv_addr, BRIGHTNESS_REG, 0x00); //default
+         ret = write_reg_verified(sensor->slv_addr, BRIGHTNESS_REG, 0x00); //default
         break;
     case brightness_5:
-       ret = write_reg(sensor->slv_addr, BRIGHTNESS_REG, 0x01); //+1
+       ret = write_reg_verified(sensor->slv_addr, BRIGHTNESS_REG, 0x01); //+1
         break;  
     case brightness_6:
-        ret = write_reg(sensor->slv_addr, BRIGHTNESS_REG, 0x03); //+2
+        ret = write_reg_verified(sensor->slv_addr, BRIGHTNESS_REG, 0x03); //+2
         break;
     case brightness_7:
-        ret = write_reg(sensor->slv_addr, BRIGHTNESS_REG, 0x05); //+3  
+        ret = write_reg_verified(sensor->slv_addr, BRIGHTNESS_REG, 0x05); //+3  
         break;
     case brightness_8:
-    ret = write_reg(sensor->slv_addr, BRIGHTNESS_REG, 0x07); //+4
+    ret = write_reg_verified(sensor->slv_addr, BRIGHTNESS_REG, 0x07); //+4
       break;  
     default:
         ESP_LOGW(TAG, "brightness fail");
@@ -235,25 +262,25 @@ static int set_contrast(sensor_t *sensor, int level)
     }
     switch (level) {
     case contrast_0:
-        ret = write_reg(sensor->slv_addr, CONTRAST_REG, 0x06); //-3
+        ret = write_reg_verified(sensor->slv_addr, CONTRAST_REG, 0x06); //-3
         break;
     case contrast_1:
-        ret = write_reg(sensor->slv_addr, CONTRAST_REG, 0x04); //-2
+        ret = write_reg_verified(sensor->slv_addr, CONTRAST_REG, 0x04); //-2
         break;
     case contrast_2:
-        ret = write_reg(sensor->slv_addr, CONTRAST_REG, 0x02); //-1
+        ret = write_reg_verified(sensor->slv_addr, CONTRAST_REG, 0x02); //-1
         break;
     case contrast_3:
-        ret = write_reg(sensor->slv_addr, CONTRAST_REG, 0x00); //default
+        ret = write_reg_verified(sensor->slv_addr, CONTRAST_REG, 0x00); //default
         break;
     case contrast_4:
-        ret = write_reg(sensor->slv_addr, CONTRAST_REG, 0x01); //+1
+        ret = write_reg_verified(sensor->slv_addr, CONTRAST_REG, 0x01); //+1
         break;
     case contrast_5:
-        ret = write_reg(sensor->slv_addr, CONTRAST_REG, 0x03); //+2 
+        ret = write_reg_verified(sensor->slv_addr, CONTRAST_REG, 0x03); //+2 
         break;  
     case contrast_6:
-        ret = write_reg(sensor->slv_addr, CONTRAST_REG, 0x05); //+3
+        ret = write_reg_verified(sensor->slv_addr, CONTRAST_REG, 0x05); //+3
         break;  
     default:
         ESP_LOGW(TAG, "contrast fail");
@@ -276,30 +303,30 @@ static int set_saturation(sensor_t *sensor, int level)
     }
     switch (level) {
     case saturation_0:
-        ret = write_reg(sensor->slv_addr, SATURATION_REG, 0x06); //-3
+        ret = write_reg_verified(sensor->slv_addr, SATURATION_REG, 0x06); //-3
         
         break;
     case saturation_1:
-        ret = write_reg(sensor->slv_addr, SATURATION_REG, 0x04); //-2
+        ret = write_reg_verified(sensor->slv_addr, SATURATION_REG, 0x04); //-2
         
         break;
 
     case saturation_2:
-        ret = write_reg(sensor->slv_addr, SATURATION_REG, 0x02); //-1
+        ret = write_reg_verified(sensor->slv_addr, SATURATION_REG, 0x02); //-1
         break;
     case saturation_3:
-        ret = write_reg(sensor->slv_addr, SATURATION_REG, 0x00); //default
+        ret = write_reg_verified(sensor->slv_addr, SATURATION_REG, 0x00); //default
         
         break;
     case saturation_4:
-        ret = write_reg(sensor->slv_addr, SATURATION_REG, 0x01); //+1
+        ret = write_reg_verified(sensor->slv_addr, SATURATION_REG, 0x01); //+1
         break;
     case saturation_5:
-        ret = write_reg(sensor->slv_addr, SATURATION_REG, 0x03); //+2
+        ret = write_reg_verified(sensor->slv_addr, SATURATION_REG, 0x03); //+2
         
         break;  
     case saturation_6:
-        ret = write_reg(sensor->slv_addr, SATURATION_REG, 0x05); //+3
+        ret = write_reg_verified(sensor->slv_addr, SATURATION_REG, 0x05); //+3
         break;  
     default:
         ESP_LOGW(TAG, "saturation fail");
@@ -322,25 +349,25 @@ static int set_exposure_ctrl(sensor_t *sensor, int enable)
     }
     switch (enable) {
     case exposure_0:
-        ret = write_reg(sensor->slv_addr, EXP_COMPENSATE_REG, 0x00); //default
+        ret = write_reg_verified(sensor->slv_addr, EXP_COMPENSATE_REG, 0x00); //default
         break;
     case exposure_1:
-        ret = write_reg(sensor->slv_addr, EXP_COMPENSATE_REG, 0x01); //+1
+        ret = write_reg_verified(sensor->slv_addr, EXP_COMPENSATE_REG, 0x01); //+1
         break;
     case exposure_2:
-        ret = write_reg(sensor->slv_addr, EXP_COMPENSATE_REG, 0x02); //-1
+        ret = write_reg_verified(sensor->slv_addr, EXP_COMPENSATE_REG, 0x02); //-1
         break;
     case exposure_3:
-        ret = write_reg(sensor->slv_addr, EXP_COMPENSATE_REG, 0x03); //+2
+        ret = write_reg_verified(sensor->slv_addr, EXP_COMPENSATE_REG, 0x03); //+2
         break;
     case exposure_4:
-        ret = write_reg(sensor->slv_addr, EXP_COMPENSATE_REG, 0x04); //-2
+        ret = write_reg_verified(sensor->slv_addr, EXP_COMPENSATE_REG, 0x04); //-2
         break;
     case exposure_5:
-        ret = write_reg(sensor->slv_addr, EXP_COMPENSATE_REG, 0x05); //+3
+        ret = write_reg_verified(sensor->slv_addr, EXP_COMPENSATE_REG, 0x05); //+3
         break;  
     case exposure_6:
-        ret = write_reg(sensor->slv_addr, EXP_COMPENSATE_REG, 0x06); //-3
+        ret = write_reg_verified(sensor->slv_addr, EXP_COMPENSATE_REG, 0x06); //-3
         break;  
     default:
         ESP_LOGW(TAG, "exposure fail");
@@ -362,19 +389,19 @@ static int set_wb_mode (sensor_t *sensor, int mode)
     }
     switch (mode) {
     case Auto:
-        ret = write_reg(sensor->slv_addr, AWB_MODE_REG, 0x00); 
+        ret = write_reg_verified(sensor->slv_addr, AWB_MODE_REG, 0x00); 
         break;
     case sunny:
-        ret = write_reg(sensor->slv_addr, AWB_MODE_REG, 0x01); 
+        ret = write_reg_verified(sensor->slv_addr, AWB_MODE_REG, 0x01); 
         break;
     case office:
-        ret = write_reg(sensor->slv_addr, AWB_MODE_REG, 0x02);
+        ret = write_reg_verified(sensor->slv_addr, AWB_MODE_REG, 0x02);
         break;
     case cloudy:
-        ret = write_reg(sensor->slv_addr, AWB_MODE_REG, 0x03);
+        ret = write_reg_verified(sensor->slv_addr, AWB_MODE_REG, 0x03);
         break;
     case home:
-        ret = write_reg(sensor->slv_addr, AWB_MODE_REG, 0x04); 
+        ret = write_reg_verified(sensor->slv_addr, AWB_MODE_REG, 0x04); 
         break; 
     default:
         ESP_LOGW(TAG, "AWB_mode fail");
@@ -397,28 +424,28 @@ static int set_special_effect (sensor_t *sensor, int effect)
     }
     switch (effect) {
     case normal:
-     ret = write_reg(sensor->slv_addr, SPECIAL_REG, 0x00); 
+     ret = write_reg_verified(sensor->slv_addr, SPECIAL_REG, 0x00); 
         break;
     case blueish:
-     ret = write_reg(sensor->slv_addr, SPECIAL_REG, 0x01); 
+     ret = write_reg_verified(sensor->slv_addr, SPECIAL_REG, 0x01); 
         break;
     case redish:
-     ret = write_reg(sensor->slv_addr, SPECIAL_REG, 0x02); 
+     ret = write_reg_verified(sensor->slv_addr, SPECIAL_REG, 0x02); 
         break;
     case BorW:
-     ret = write_reg(sensor->slv_addr, SPECIAL_REG, 0x03); 
+     ret = write_reg_verified(sensor->slv_addr, SPECIAL_REG, 0x03); 
         break;
     case sepia:
-     ret = write_reg(sensor->slv_addr, SPECIAL_REG, 0x04); 
+     ret = write_reg_verified(sensor->slv_addr, SPECIAL_REG, 0x04); 
         break;
     case negative:
-     ret = write_reg(sensor->slv_addr, SPECIAL_REG, 0x05); 
+     ret = write_reg_verified(sensor->slv_addr, SPECIAL_REG, 0x05); 
         break;
     case greenish:
-     ret = write_reg(sensor->slv_addr, SPECIAL_REG, 0x06); 
+     ret = write_reg_verified(sensor->slv_addr, SPECIAL_REG, 0x06); 
         break;
     default:
-     ret = write_reg(sensor->slv_addr, SPECIAL_REG, 0x00); 
+     ret = write_reg_verified(sensor->slv_addr, SPECIAL_REG, 0x00); 
         break;
     }
     if (ret == 0) {
@@ -436,13 +463,13 @@ static int set_quality (sensor_t *sensor, int quality)
     }
      switch (quality) {
      case quality_high:
-        ret = write_reg(sensor->slv_addr, IMAGE_QUALITY_REG, 0x00); 
+        ret = write_reg_verified(sensor->slv_addr, IMAGE_QUALITY_REG, 0x00); 
         break;
         case quality_default:
-             ret = write_reg(sensor->slv_addr, IMAGE_QUALITY_REG, 0x01); 
+             ret = write_reg_verified(sensor->slv_addr, IMAGE_QUALITY_REG, 0x01); 
         break;
         case quality_low:
-             ret = write_reg(sensor->slv_addr, IMAGE_QUALITY_REG, 0x02);
+             ret = write_reg_verified(sensor->slv_addr, IMAGE_QUALITY_REG, 0x02);
         break;
         default:
             ESP_LOGW(TAG, "Invalid quality  : %d", quality);

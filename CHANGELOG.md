@@ -27,6 +27,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Sensor silently dropped settings written right after a reset** — writes
+  issued at boot or after `camera_reinit()` are ACKed on the bus but sometimes
+  ignored by the PY260. Observed on device: white balance stayed Auto although
+  the firmware set Office, and one boot streamed **320×240** to Frigate while
+  the firmware believed it had set VGA. Image-control, resolution and pixel
+  format writes now read back and retry until they stick (up to 2 s), logging
+  any retries.
 - **SCCB read errors looked like `0xFF`** — `SCCB_Read16` now returns `-1` on a
   bus error, so `set_reg`'s error check works and register dumps can't mistake a
   failed read for data.
