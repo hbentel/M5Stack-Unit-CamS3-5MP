@@ -28,4 +28,10 @@ int mega_ccm_detect(int slv_addr, sensor_id_t *id);
  */
 int mega_ccm_init(sensor_t *sensor);
 
+/**
+ * @brief Enable/disable read-back verification of setting writes.
+ *        Enable only around boot/reinit setup; reads while streaming destabilize the sensor.
+ */
+void mega_ccm_set_write_verify(bool enable);
+
 #endif // __mega_ccm_H__

@@ -109,7 +109,9 @@ static camera_config_t camera_config = {
 // The PY260 has only these three levels — it ignores camera_config_t.jpeg_quality.
 static uint8_t s_cam_quality = 1;
 
-static void apply_camera_settings(void)
+// Applies image settings. `keep` = levels to restore (the sensor's status before a
+// camera_reinit, so changes made from Home Assistant survive it); NULL = defaults.
+static void apply_camera_settings(const camera_status_t *keep)
 {
     sensor_t *s = esp_camera_sensor_get();
     if (s == NULL) {
@@ -117,15 +119,19 @@ static void apply_camera_settings(void)
         return;
     }
 
-    ESP_LOGI(TAG, "Applying camera settings...");
+    ESP_LOGI(TAG, "Applying camera settings%s...", keep ? " (restoring previous levels)" : "");
 
-    if (s->set_brightness) s->set_brightness(s, CAM_BRIGHTNESS);
-    if (s->set_contrast) s->set_contrast(s, CAM_CONTRAST);
-    if (s->set_saturation) s->set_saturation(s, CAM_SATURATION);
-    if (s->set_special_effect) s->set_special_effect(s, CAM_SPECIAL_EFFECT);
-    if (s->set_wb_mode) s->set_wb_mode(s, CAM_WB_MODE);
-    if (s->set_exposure_ctrl) s->set_exposure_ctrl(s, CAM_EXPOSURE_COMP);
+    // Read-back verification only here (sensor freshly reset); runtime changes from
+    // MQTT are written once, because SCCB reads while streaming destabilize the PY260.
+    esp_camera_set_write_verify(true);
+    if (s->set_brightness) s->set_brightness(s, keep ? keep->brightness : CAM_BRIGHTNESS);
+    if (s->set_contrast) s->set_contrast(s, keep ? keep->contrast : CAM_CONTRAST);
+    if (s->set_saturation) s->set_saturation(s, keep ? keep->saturation : CAM_SATURATION);
+    if (s->set_special_effect) s->set_special_effect(s, keep ? keep->special_effect : CAM_SPECIAL_EFFECT);
+    if (s->set_wb_mode) s->set_wb_mode(s, keep ? keep->wb_mode : CAM_WB_MODE);
+    if (s->set_exposure_ctrl) s->set_exposure_ctrl(s, keep ? keep->ae_level : CAM_EXPOSURE_COMP);
     if (s->set_quality) s->set_quality(s, s_cam_quality);
+    esp_camera_set_write_verify(false);
     // set_whitebal, set_awb_gain, set_gain_ctrl are not implemented by PY260 (wired to set_dummy)
 
     ESP_LOGI(TAG, "Camera settings applied");
@@ -157,6 +163,14 @@ esp_err_t camera_reinit(void)
     }
 
     ESP_LOGW(TAG, "Reinitializing camera driver...");
+    // Remember the current levels (possibly changed from Home Assistant) to restore.
+    camera_status_t prev = {0};
+    bool have_prev = false;
+    sensor_t *old = esp_camera_sensor_get();
+    if (old) {
+        prev = old->status;
+        have_prev = true;
+    }
     esp_camera_deinit();
     vTaskDelay(pdMS_TO_TICKS(100));
 
@@ -166,6 +180,7 @@ esp_err_t camera_reinit(void)
     gpio_set_level(CAM_PIN_RESET, 1);
     vTaskDelay(pdMS_TO_TICKS(200));
 
+    esp_camera_set_write_verify(true);  // verify the resolution/format writes too
     esp_err_t err = esp_camera_init(&camera_config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Camera reinit failed: 0x%x", err);
@@ -173,7 +188,7 @@ esp_err_t camera_reinit(void)
         return err;
     }
 
-    apply_camera_settings();
+    apply_camera_settings(have_prev ? &prev : NULL);
 
     // Let sensor stabilize
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -326,7 +341,7 @@ void app_main(void)
         while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
     }
 
-    apply_camera_settings();
+    apply_camera_settings(NULL);
 
     // Prime DMA pipeline — Wi-Fi is fully connected, OPI bus is stable
     ESP_LOGI(TAG, "--- Priming camera pipeline ---");

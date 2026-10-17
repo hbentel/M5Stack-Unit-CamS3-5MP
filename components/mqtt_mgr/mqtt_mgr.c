@@ -138,6 +138,11 @@ static void send_ha_discovery(void)
     snprintf(state_topic, sizeof(state_topic), "%s/wb_mode", base_topic);
     snprintf(cmd_topic, sizeof(cmd_topic), "%s/wb_mode/set", base_topic);
     publish_discovery("number", "wb_mode", "WB Mode (0=Auto,1=Sunny,2=Office,3=Cloudy,4=Home)", NULL, NULL, cmd_topic, state_topic, 0, 4);
+
+    // Effect (B&W can suit night scenes with a strong colour cast)
+    snprintf(state_topic, sizeof(state_topic), "%s/effect", base_topic);
+    snprintf(cmd_topic, sizeof(cmd_topic), "%s/effect/set", base_topic);
+    publish_discovery("number", "effect", "Effect (0=Normal,1=Blueish,2=Reddish,3=B&W,4=Sepia,5=Negative,6=Greenish)", NULL, NULL, cmd_topic, state_topic, 0, 6);
     
     // PSRAM Free
     snprintf(state_topic, sizeof(state_topic), "%s/psram_free", base_topic);
@@ -202,6 +207,7 @@ void mqtt_mgr_publish_camera_state(void)
         {"contrast",   s->status.contrast},
         {"saturation", s->status.saturation},
         {"wb_mode",    s->status.wb_mode},
+        {"effect",     s->status.special_effect},
     };
     char topic[128];
     char payload[8];
@@ -251,6 +257,9 @@ static void handle_command(const char *topic_ptr, int topic_len, const char *dat
         mqtt_mgr_publish_camera_state();
     } else if (strstr(topic, "wb_mode/set")) {
         if (s->set_wb_mode) s->set_wb_mode(s, val);
+        mqtt_mgr_publish_camera_state();
+    } else if (strstr(topic, "effect/set")) {
+        if (val >= 0 && val <= 6 && s->set_special_effect) s->set_special_effect(s, val);
         mqtt_mgr_publish_camera_state();
     } else if (strstr(topic, "ota/set")) {
         char raw[300];

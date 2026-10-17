@@ -316,6 +316,11 @@ esp_err_t esp_camera_load_from_nvs(const char *key)
     }
 }
 
+void esp_camera_set_write_verify(bool enable)
+{
+    mega_ccm_set_write_verify(enable);
+}
+
 void esp_camera_return_all(void) {
     if (s_state == NULL) {
         return;

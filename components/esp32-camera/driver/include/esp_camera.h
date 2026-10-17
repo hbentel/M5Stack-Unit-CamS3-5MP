@@ -251,6 +251,13 @@ esp_err_t esp_camera_load_from_nvs(const char *key);
 void esp_camera_return_all(void);
 
 /**
+ * @brief Enable/disable read-back verification of sensor setting writes (PY260).
+ *        Verify during boot/reinit setup only; SCCB reads while streaming make the
+ *        sensor revert to its default resolution.
+ */
+void esp_camera_set_write_verify(bool enable);
+
+/**
  * @brief Get internal driver debug statistics (VSYNC counts, drops, etc)
  */
 typedef struct {

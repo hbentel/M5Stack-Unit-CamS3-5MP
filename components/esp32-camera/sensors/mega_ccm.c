@@ -72,8 +72,20 @@ static int write_reg(uint8_t slv_addr, const uint16_t reg, uint8_t value)
 #define VERIFY_ATTEMPTS  20
 #define VERIFY_RETRY_MS  100
 
+/* Verification is for boot/reinit only: SCCB reads while the sensor streams make it
+ * revert to 320x240, so runtime changes (MQTT/HA) are written once, unverified. */
+static bool s_verify_writes = true;
+
+void mega_ccm_set_write_verify(bool enable)
+{
+    s_verify_writes = enable;
+}
+
 static int write_reg_verified(uint8_t slv_addr, const uint16_t reg, uint8_t value)
 {
+    if (!s_verify_writes) {
+        return write_reg(slv_addr, reg, value);
+    }
     for (int attempt = 1; attempt <= VERIFY_ATTEMPTS; attempt++) {
         if (write_reg(slv_addr, reg, value) == 0 && read_reg(slv_addr, reg) == value) {
             if (attempt > 1) {
