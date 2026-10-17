@@ -85,7 +85,7 @@ The VSYNC ISR has two hard requirements that must not be removed:
 | `http_server/` | Port 80: snapshot `/`, health `/health` (incl. `reset_reason`), stats `/stats`, coredump `/api/coredump`, logs `/api/logs`, sensor registers `/api/reg` (debug); Port 81: MJPEG stream `/stream` |
 | `ota_mgr/` | URL-based OTA via MQTT — publish firmware URL to `unitcams3/ota/set` |
 | `mqtt_mgr/` | MQTT client, HA auto-discovery, telemetry every 10s, command handling |
-| `recovery_mgr/` | NVS boot-loop detection (threshold=3), safe mode, OTA rollback confirmation (synchronous, pre-Wi-Fi) |
+| `recovery_mgr/` | Crash-loop detection in RTC memory (3 crash boots = safe mode), OTA image confirmation after 120 s (`recovery_mgr_confirm_image()`, called by `confirm_ota_image()` in `main.c` with the camera and Wi-Fi stopped) |
 
 ### HTTP Ports Summary
 
@@ -104,7 +104,7 @@ Base topic: `unitcams3`
 | `unitcams3/rssi`, `/uptime`, `/heap`, `/psram_free` | publish | Telemetry every 10s |
 | `unitcams3/fps`, `/no_soi`, `/jpeg_drops`, `/recovery_count`, `/streams` | publish | Camera health/stats every 10s |
 | `unitcams3/ota_status` | publish | `idle` / `pending_reboot` |
-| `unitcams3/brightness/set`, `/contrast/set`, `/saturation/set`, `/wb_mode/set` | subscribe | Camera image controls |
+| `unitcams3/brightness/set`, `/contrast/set`, `/saturation/set`, `/wb_mode/set`, `/effect/set` | subscribe | Camera image controls |
 | `unitcams3/fps_cap/set` | subscribe | FPS cap (0=unlimited, 1–15); not persisted across reboot |
 | `unitcams3/led/set` | subscribe | LED on/off (`1`/`0`) |
 | `unitcams3/restart` | subscribe | Triggers `esp_restart()` |
