@@ -69,14 +69,17 @@ causing every captured buffer to start mid-frame with no JPEG SOI marker.
 At 80 MHz, OPI bus contention between camera GDMA writes and CPU PSRAM reads causes
 DMA corruption. `CONFIG_SPIRAM_SPEED_40M=y` in `sdkconfig.defaults` is mandatory.
 
-### `psram_mode = false`
+### `psram_mode` (true in production)
 
-The upstream M5Stack driver sets `cam_obj->psram_mode = (xclk_freq_hz == 16000000)`.
-At 10 MHz this silently evaluates to `false`, which in the original driver means
-frame buffers are allocated in internal DRAM (which cannot hold a 512 KB JPEG).
-This firmware overrides that path: `fb_location = CAMERA_FB_IN_PSRAM` is set
-directly and `psram_mode` is left `false` throughout. Testing with `psram_mode = true`
-produced frame truncation with no throughput benefit.
+The upstream M5Stack driver sets `cam_obj->psram_mode = (xclk_freq_hz == 16000000)`,
+which at 10 MHz silently evaluates to `false`. This fork derives it from
+`fb_location` instead, so with `CAMERA_FB_IN_PSRAM` it is **true**: GDMA writes
+straight into 4 PSRAM frame buffers, and the VSYNC ISR manages them autonomously
+via `free_mask` (`ll_cam_vsync_isr` PSRAM-JPEG path, finalized by
+`cam_psram_jpeg_task`). An early experiment with a different `psram_mode=true`
+code path produced truncated frames; the current path is the one that has run in
+production. Until 2026-10-16 a recovery-path bug in `cam_reset_and_free_frame()`
+stranded 3 of the 4 buffers, so the camera effectively ran single-buffered.
 
 ### `SPIRAM_FETCH_INSTRUCTIONS` and `SPIRAM_RODATA` must stay disabled
 
@@ -189,8 +192,8 @@ Next boot:
     → esp_ota_begin() → flash loop (4 KB internal SRAM staging buffer) → esp_ota_end()
     → esp_ota_set_boot_partition() → esp_restart()
 
-Two minutes after clean boot:
-    → recovery_mgr health timer fires
+First boot of the new image (and every boot):
+    → recovery_mgr_init(), before Wi-Fi starts (the only flash-write-safe window)
     → esp_ota_mark_app_valid_cancel_rollback()
 ```
 
@@ -198,11 +201,16 @@ Two minutes after clean boot:
 
 ## Recovery Manager: Boot-Loop Detection
 
-The recovery manager increments an NVS `boot_count` on every boot and resets it
-after 2 minutes of stable uptime (`esp_ota_mark_app_valid_cancel_rollback` is
-also called at that point). If the device crashes and reboots 3 times before
-the 2-minute timer fires, `boot_count` reaches the threshold and services are
-suppressed (safe mode) to allow serial diagnostics.
+The recovery manager increments an NVS `boot_count` on every boot. Since v0.2.7 it
+also marks the running image valid and resets `boot_count` to 0 during the same
+early-boot call, because flash writes are only safe before Wi-Fi starts (the old
+2-minute health timer crashed the device).
+
+**Known limitation:** because the counter is reset on every boot, it can never
+reach the boot-loop threshold, and because the image is confirmed before Wi-Fi,
+camera or MQTT start, an OTA image that crashes later in boot is *not* rolled
+back. `recovery_mgr_is_safe_mode()` is also not consulted anywhere, so safe mode
+would not suppress services even if it triggered.
 
 **Planned reboot signalling:** OTA triggers and MQTT restart commands call
 `recovery_mgr_signal_planned_reboot()` before `esp_restart()`. This writes a
@@ -223,7 +231,7 @@ the flag — preventing deliberate reboots from tripping the boot-loop threshold
 | `log_buf/` | 16 KB PSRAM ring buffer hooked into `esp_log_set_vprintf()`; exposes `log_buf_snapshot()` for `/api/logs` |
 | `mqtt_mgr/` | MQTT client, HA auto-discovery, telemetry every 10 s, command handling |
 | `ota_mgr/` | URL-based OTA via MQTT, RTC NOINIT URL storage, OTA callback registration |
-| `recovery_mgr/` | NVS boot-loop detection, 2-min health timer, planned-reboot signalling |
+| `recovery_mgr/` | NVS boot counter, OTA image confirmation (pre-Wi-Fi), planned-reboot signalling |
 
 ---
 

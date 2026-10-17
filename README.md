@@ -48,7 +48,7 @@ The device IP is printed to the serial monitor on boot and is shown on the `/set
 - **Home Assistant auto-discovery** — sensor, number, and button entities on connect
 - **Camera image controls** via MQTT — brightness, contrast, saturation, white balance
 - **URL-based OTA** — publish firmware URL to MQTT; optional token auth and SHA-256 integrity verification before flashing
-- **Recovery manager** — NVS boot-loop detection, 2-minute health timer, OTA rollback
+- **Recovery manager** — NVS boot counter and OTA image confirmation before Wi-Fi starts, OTA rollback
 - **Core dump to flash** — download crash dumps via `GET /api/coredump`
 - **Web log viewer** — `GET /api/logs` returns the full boot and runtime log from a 16 KB PSRAM ring buffer
 - **mDNS** — device is reachable at `<device-id>.local` (e.g. `unitcams3.local`) in addition to its IP

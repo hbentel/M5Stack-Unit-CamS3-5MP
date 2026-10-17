@@ -40,7 +40,7 @@ PY260 sensor → GDMA → PSRAM frame buffers (4×~512KB)
                            ↓
                     mjpeg_broadcaster_task (Core 1)
                     - idles when 0 clients connected
-                    - copies to frame_pool (8×512KB PSRAM)
+                    - copies to frame_pool (5×512KB PSRAM)
                     - signals active worker tasks
                            ↓
                     mjpeg_client_worker_task (Core 1)
@@ -64,21 +64,22 @@ The VSYNC ISR has two hard requirements that must not be removed:
 
 ### Hard Hardware Constraints
 
-- **XCLK = 10MHz — do not increase.** The PY260's vertical front porch is ~3μs at 10MHz. At 16MHz it's ~1.875μs (causes double exception crash), at 20MHz ~1.5μs (96% NO-SOI flood). 10MHz is a physical sensor ceiling.
+- **XCLK = 10MHz — do not increase.** The PY260's vertical front porch is ~3μs at 10MHz. At 16MHz it's ~1.875μs (causes double exception crash), at 20MHz ~1.5μs (96% NO-SOI flood). 10MHz is a physical sensor ceiling. (Caveat, 2026-10-16: capture re-armed 5–10 ms after VSYNC never missed an SOI over 11.8M frames, so the "~3μs front porch" explanation is unconfirmed — the 16/20 MHz failures are real, their cause may differ.)
 - **PSRAM at 40MHz** — not 80MHz. Higher speed causes OPI bus contention with camera DMA.
 - **Task Stacks in Internal RAM** — `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=n` is mandatory. Stacks in PSRAM cause Double Exception crashes during flash writes (NVS/OTA).
 - **Main Task Stack = 16KB** — required for heavy initialization.
 - **Task WDT Panic = enabled** — `CONFIG_ESP_TASK_WDT_PANIC=y` for production auto-recovery. Timeout is 30s.
-- **`psram_mode = false`** — `psram_mode=true` was tested and causes frame truncation bugs. Do not re-enable.
+- **`psram_mode` is TRUE in production** — derived from `fb_location == CAMERA_FB_IN_PSRAM` in `cam_hal.c`; the autonomous multi-buffer VSYNC-ISR path is the live capture path.
 - **`SPIRAM_FETCH_INSTRUCTIONS` and `SPIRAM_RODATA` must stay disabled** — code/rodata in PSRAM competes with camera DMA on the OPI bus.
-- **`FPS_TEST_MODE` in `main.c` line 24** — must be `0` for production. Set to `1` only when measuring driver performance without Frigate connected.
+- **`CONFIG_UNITCAMS3_FPS_TEST_MODE`** (Kconfig) — must be off for production; it skips the HTTP servers (Wi-Fi/MQTT still start) and prints camera FPS to serial.
+- **No SCCB traffic to the sensor while it streams** — register reads (and some writes) make the PY260 revert to 320×240 or hang its control bus. Runtime setting writes are unverified; `write_reg_verified()` is only enabled during boot/reinit. The broadcaster recovers a revert via JPEG SOF size check → `camera_reinit()`. Never call `camera_reinit()` from a task other than the broadcaster/main (it races `cam_take()`).
 
 ### Component Responsibilities
 
 | Component | Purpose |
 |-----------|---------|
 | `esp32-camera/` | Forked M5Stack driver (PY260/mega_ccm only, JPEG only, ISR on Core 1) |
-| `frame_pool/` | Pre-allocates 8×512KB PSRAM buffers at boot; decouples camera from HTTP |
+| `frame_pool/` | Pre-allocates 5×512KB PSRAM buffers at boot; decouples camera from HTTP |
 | `jpeg_validate/` | Application-level SOI/EOI check + atomic drop counter |
 | `log_buf/` | 16KB PSRAM ring buffer via `esp_log_set_vprintf()` hook; `log_buf_snapshot()` serves `/api/logs` |
 | `http_server/` | Port 80: snapshot `/`, health `/health` (incl. `reset_reason`), stats `/stats`, coredump `/api/coredump`, logs `/api/logs`, sensor registers `/api/reg` (debug); Port 81: MJPEG stream `/stream` |
