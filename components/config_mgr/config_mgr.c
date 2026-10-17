@@ -2,6 +2,8 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
+#include "esp_attr.h"
+#include "esp_rom_crc.h"
 #include <string.h>
 
 static const char *TAG = "config_mgr";
@@ -15,7 +17,7 @@ static const char *TAG = "config_mgr";
 #define KEY_DEVICE_ID  "device_id"
 #define KEY_MQTT_EN    "mqtt_en"
 #define KEY_CAM_RES    "cam_res"
-#define KEY_JPEG_QUAL  "jpeg_qual"
+#define KEY_CAM_QUAL   "jpeg_qual"   /* key name kept for NVS compatibility */
 #define KEY_OTA_TOKEN  "ota_token"
 #define KEY_CD_TOKEN   "cd_token"
 
@@ -29,7 +31,9 @@ static const char *TAG = "config_mgr";
 
 /* Default framesize: FRAMESIZE_VGA = 10 */
 #define DEFAULT_CAM_RES   10
-#define DEFAULT_JPEG_QUAL 12
+/* PY260 JPEG compression level: 0 = High, 1 = Default, 2 = Low (mega_ccm.c set_quality) */
+#define DEFAULT_CAM_QUAL  1
+#define CAM_QUAL_MAX      2
 
 /* In-memory config state */
 static char s_mqtt_url[MQTT_URL_MAX];
@@ -40,7 +44,7 @@ static char s_ota_token[OTA_TOKEN_MAX];
 static char s_cd_token[CD_TOKEN_MAX];
 static bool    s_mqtt_en;
 static uint8_t s_cam_res;
-static uint8_t s_jpeg_qual;
+static uint8_t s_cam_qual;
 
 static bool s_initialized = false;
 
@@ -110,7 +114,7 @@ esp_err_t config_mgr_init(void)
         strlcpy(s_cd_token,  CONFIG_UNITCAMS3_COREDUMP_TOKEN,  sizeof(s_cd_token));
         s_mqtt_en  = true;
         s_cam_res  = DEFAULT_CAM_RES;
-        s_jpeg_qual = DEFAULT_JPEG_QUAL;
+        s_cam_qual = DEFAULT_CAM_QUAL;
         s_initialized = true;
         return ESP_OK;
     }
@@ -119,7 +123,7 @@ esp_err_t config_mgr_init(void)
     uint8_t mqtt_en_u8 = 1;
     load_u8(nh, KEY_MQTT_EN,   &mqtt_en_u8,   1);
     load_u8(nh, KEY_CAM_RES,   &s_cam_res,    DEFAULT_CAM_RES);
-    load_u8(nh, KEY_JPEG_QUAL, &s_jpeg_qual,  DEFAULT_JPEG_QUAL);
+    load_u8(nh, KEY_CAM_QUAL,  &s_cam_qual,   DEFAULT_CAM_QUAL);
     s_mqtt_en = (mqtt_en_u8 != 0);
 
     /* Validate cam_res against PY260-supported framesizes.
@@ -132,10 +136,18 @@ esp_err_t config_mgr_init(void)
         s_cam_res = DEFAULT_CAM_RES;
     }
 
+    /* Older firmware stored a 1-63 "JPEG quality" here that was never
+     * applied to the sensor (which only has 3 levels). Any out-of-range value is
+     * such a legacy setting — map it to Default, which is what was in effect. */
+    if (s_cam_qual > CAM_QUAL_MAX) {
+        ESP_LOGW(TAG, "legacy jpeg_qual=%u — using Default quality (%u)", s_cam_qual, DEFAULT_CAM_QUAL);
+        s_cam_qual = DEFAULT_CAM_QUAL;
+    }
+
     nvs_close(h);
 
     ESP_LOGI(TAG, "Config loaded: url=%s user=%s dev=%s mqtt_en=%d res=%u qual=%u",
-             s_mqtt_url, s_mqtt_user, s_device_id, s_mqtt_en, s_cam_res, s_jpeg_qual);
+             s_mqtt_url, s_mqtt_user, s_device_id, s_mqtt_en, s_cam_res, s_cam_qual);
 
     s_initialized = true;
     return ESP_OK;
@@ -149,7 +161,7 @@ const char *config_mgr_get_mqtt_pass(void)     { return s_mqtt_pass; }
 const char *config_mgr_get_device_id(void)     { return s_device_id; }
 bool        config_mgr_is_mqtt_enabled(void)   { return s_mqtt_en; }
 uint8_t     config_mgr_get_cam_resolution(void){ return s_cam_res; }
-uint8_t     config_mgr_get_jpeg_quality(void)  { return s_jpeg_qual; }
+uint8_t     config_mgr_get_cam_quality(void)   { return s_cam_qual; }
 const char *config_mgr_get_ota_token(void)     { return s_ota_token; }
 const char *config_mgr_get_coredump_token(void) { return s_cd_token; }
 
@@ -168,26 +180,24 @@ void config_mgr_set_cam_resolution(uint8_t v)
     }
     s_cam_res = v;
 }
-void config_mgr_set_jpeg_quality(uint8_t v)
+void config_mgr_set_cam_quality(uint8_t v)
 {
-    if (v < 1 || v > 63) {
-        ESP_LOGW(TAG, "set_jpeg_quality: %u out of range (1-63) — ignoring", v);
+    if (v > CAM_QUAL_MAX) {
+        ESP_LOGW(TAG, "set_cam_quality: %u out of range (0-%u) — ignoring", v, CAM_QUAL_MAX);
         return;
     }
-    s_jpeg_qual = v;
+    s_cam_qual = v;
 }
 void config_mgr_set_ota_token(const char *v)     { strlcpy(s_ota_token, v, sizeof(s_ota_token)); }
 void config_mgr_set_coredump_token(const char *v) { strlcpy(s_cd_token,  v, sizeof(s_cd_token)); }
 
 /* --- Persist to NVS --- */
 
-esp_err_t config_mgr_save(void)
+/* Writes the in-memory config to NVS. Only call this before Wi-Fi starts (see
+ * config_mgr_apply_staged()) — a flash write disables the OPI PSRAM cache, and
+ * doing it with Wi-Fi/MQTT running has crashed this device (v0.2.5, v0.2.7). */
+static esp_err_t write_nvs(void)
 {
-    if (!s_initialized) {
-        ESP_LOGE(TAG, "config_mgr_save called before init");
-        return ESP_ERR_INVALID_STATE;
-    }
-
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
     if (err != ESP_OK) {
@@ -205,7 +215,7 @@ esp_err_t config_mgr_save(void)
     if (err == ESP_OK) err = nvs_set_str(h, KEY_CD_TOKEN,  s_cd_token);
     if (err == ESP_OK) err = nvs_set_u8(h,  KEY_MQTT_EN,   s_mqtt_en ? 1 : 0);
     if (err == ESP_OK) err = nvs_set_u8(h,  KEY_CAM_RES,   s_cam_res);
-    if (err == ESP_OK) err = nvs_set_u8(h,  KEY_JPEG_QUAL, s_jpeg_qual);
+    if (err == ESP_OK) err = nvs_set_u8(h,  KEY_CAM_QUAL,  s_cam_qual);
 
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "nvs_set failed err=0x%x — aborting save without commit", err);
@@ -222,4 +232,97 @@ esp_err_t config_mgr_save(void)
         ESP_LOGI(TAG, "Config saved to NVS");
     }
     return err;
+}
+
+/* --- Deferred save / factory reset via RTC RAM ---
+ *
+ * /setup runs while Wi-Fi is up, where flash writes are unsafe. Instead of
+ * writing NVS there, the new config (or a factory-reset request) is staged in
+ * RTC_NOINIT memory — a plain SRAM write that survives esp_restart() — and
+ * committed on the next boot, before Wi-Fi starts. Same pattern as the OTA URL
+ * (ota_mgr.c) and Wi-Fi reprovisioning (wifi.c).
+ */
+#define STAGED_CONFIG_MAGIC         0xC0F16A01UL
+#define STAGED_FACTORY_RESET_MAGIC  0xFAC70A55UL
+
+typedef struct {
+    char    mqtt_url[MQTT_URL_MAX];
+    char    mqtt_user[MQTT_USER_MAX];
+    char    mqtt_pass[MQTT_PASS_MAX];
+    char    device_id[DEVICE_ID_MAX];
+    char    ota_token[OTA_TOKEN_MAX];
+    char    cd_token[CD_TOKEN_MAX];
+    uint8_t mqtt_en;
+    uint8_t cam_res;
+    uint8_t cam_qual;
+} staged_cfg_t;
+
+static RTC_NOINIT_ATTR uint32_t     s_staged_magic;
+static RTC_NOINIT_ATTR uint32_t     s_staged_check;  /* CRC32 of cfg, or ~magic for factory reset */
+static RTC_NOINIT_ATTR staged_cfg_t s_staged_cfg;
+
+static uint32_t staged_crc(void)
+{
+    return esp_rom_crc32_le(0, (const uint8_t *)&s_staged_cfg, sizeof(s_staged_cfg));
+}
+
+esp_err_t config_mgr_stage_for_reboot(void)
+{
+    if (!s_initialized) {
+        ESP_LOGE(TAG, "config_mgr_stage_for_reboot called before init");
+        return ESP_ERR_INVALID_STATE;
+    }
+    strlcpy(s_staged_cfg.mqtt_url,  s_mqtt_url,  sizeof(s_staged_cfg.mqtt_url));
+    strlcpy(s_staged_cfg.mqtt_user, s_mqtt_user, sizeof(s_staged_cfg.mqtt_user));
+    strlcpy(s_staged_cfg.mqtt_pass, s_mqtt_pass, sizeof(s_staged_cfg.mqtt_pass));
+    strlcpy(s_staged_cfg.device_id, s_device_id, sizeof(s_staged_cfg.device_id));
+    strlcpy(s_staged_cfg.ota_token, s_ota_token, sizeof(s_staged_cfg.ota_token));
+    strlcpy(s_staged_cfg.cd_token,  s_cd_token,  sizeof(s_staged_cfg.cd_token));
+    s_staged_cfg.mqtt_en  = s_mqtt_en ? 1 : 0;
+    s_staged_cfg.cam_res  = s_cam_res;
+    s_staged_cfg.cam_qual = s_cam_qual;
+    s_staged_check = staged_crc();
+    s_staged_magic = STAGED_CONFIG_MAGIC;
+    ESP_LOGI(TAG, "Config staged in RTC RAM — will be saved to NVS on next boot");
+    return ESP_OK;
+}
+
+void config_mgr_stage_factory_reset(void)
+{
+    s_staged_check = ~STAGED_FACTORY_RESET_MAGIC;
+    s_staged_magic = STAGED_FACTORY_RESET_MAGIC;
+    ESP_LOGW(TAG, "Factory reset staged in RTC RAM — NVS will be erased on next boot");
+}
+
+esp_err_t config_mgr_apply_staged(void)
+{
+    uint32_t magic = s_staged_magic;
+    uint32_t check = s_staged_check;
+    s_staged_magic = 0;  /* clear first: a crash below must not repeat the action every boot */
+
+    if (magic == STAGED_FACTORY_RESET_MAGIC && check == ~STAGED_FACTORY_RESET_MAGIC) {
+        ESP_LOGW(TAG, "Applying staged factory reset — erasing NVS");
+        nvs_flash_deinit();
+        esp_err_t err = nvs_flash_erase();
+        if (err == ESP_OK) err = nvs_flash_init();
+        if (err != ESP_OK) ESP_LOGE(TAG, "Factory reset failed: 0x%x", err);
+        return err;
+    }
+
+    if (magic != STAGED_CONFIG_MAGIC || check != staged_crc()) {
+        return ESP_OK;  /* nothing staged (or stale/corrupt RTC contents after power-on) */
+    }
+
+    strlcpy(s_mqtt_url,  s_staged_cfg.mqtt_url,  sizeof(s_mqtt_url));
+    strlcpy(s_mqtt_user, s_staged_cfg.mqtt_user, sizeof(s_mqtt_user));
+    strlcpy(s_mqtt_pass, s_staged_cfg.mqtt_pass, sizeof(s_mqtt_pass));
+    strlcpy(s_device_id, s_staged_cfg.device_id, sizeof(s_device_id));
+    strlcpy(s_ota_token, s_staged_cfg.ota_token, sizeof(s_ota_token));
+    strlcpy(s_cd_token,  s_staged_cfg.cd_token,  sizeof(s_cd_token));
+    s_mqtt_en  = s_staged_cfg.mqtt_en != 0;
+    s_cam_res  = cam_res_is_valid(s_staged_cfg.cam_res) ? s_staged_cfg.cam_res : DEFAULT_CAM_RES;
+    s_cam_qual = (s_staged_cfg.cam_qual <= CAM_QUAL_MAX) ? s_staged_cfg.cam_qual : DEFAULT_CAM_QUAL;
+
+    ESP_LOGI(TAG, "Applying staged config from previous boot");
+    return write_nvs();
 }

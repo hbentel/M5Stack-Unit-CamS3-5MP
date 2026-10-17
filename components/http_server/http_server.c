@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdarg.h>
 #include <stdatomic.h>
 #include "esp_task_wdt.h"
 #include "esp_app_desc.h"
@@ -55,6 +56,7 @@ static TaskHandle_t s_broadcaster_task_handle = NULL;
 // Observability counters
 static _Atomic uint32_t s_reinit_count = 0;     // camera_reinit() calls from broadcaster
 static _Atomic uint32_t s_frames_delivered = 0; // successful worker frame sends (all clients)
+static _Atomic uint32_t s_oversize_drops = 0;   // frames larger than a frame_pool slot
 static uint32_t s_broadcaster_hwm_words = 0;    // broadcaster stack HWM, updated every 100 frames
 
 /// FPS cap: 0 = unlimited, 1-15 = max frames/sec delivered to stream clients
@@ -258,6 +260,7 @@ static esp_err_t stats_handler(httpd_req_t *req)
             "\"reinit_count\":%lu,"
             "\"active_streams\":%u,"
             "\"frames_delivered\":%lu,"
+            "\"oversize_drops\":%lu,"
             "\"soi_hist\":[%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu]"
         "},"
         "\"wifi\":{"
@@ -287,6 +290,7 @@ static esp_err_t stats_handler(httpd_req_t *req)
         (unsigned long)atomic_load(&s_reinit_count),
         http_server_get_active_streams(),
         (unsigned long)atomic_load(&s_frames_delivered),
+        (unsigned long)atomic_load(&s_oversize_drops),
         (unsigned long)cam.soi_offset_histogram[0], (unsigned long)cam.soi_offset_histogram[1],
         (unsigned long)cam.soi_offset_histogram[2], (unsigned long)cam.soi_offset_histogram[3],
         (unsigned long)cam.soi_offset_histogram[4], (unsigned long)cam.soi_offset_histogram[5],
@@ -372,6 +376,17 @@ static void mjpeg_broadcaster_task(void *arg)
 
         // Copy to a new pool buffer for broadcast
         frame_buffer_t *new_fb = frame_pool_get(100); // 100ms timeout
+        if (new_fb && fb->len > new_fb->capacity) {
+            // Pool slots are 512 KB but HD/UXGA camera buffers are 768 KB-1 MB,
+            // so a large JPEG can exceed a slot. Drop it rather than overrun PSRAM.
+            uint32_t n = atomic_fetch_add(&s_oversize_drops, 1) + 1;
+            if (n == 1 || n % 100 == 0) {
+                ESP_LOGW(TAG, "Broadcaster: frame %zu bytes > pool slot %zu — dropped (%lu total)",
+                         fb->len, new_fb->capacity, (unsigned long)n);
+            }
+            frame_pool_unref(new_fb);
+            new_fb = NULL;
+        }
         if (new_fb) {
             memcpy(new_fb->buf, fb->buf, fb->len);
             new_fb->len = fb->len;
@@ -713,11 +728,47 @@ static void html_escape(char *dst, const char *src, size_t dst_size)
     dst[o] = '\0';
 }
 
+/* Bounded HTML builder for /setup. The page used to be built with chained
+ * `pos += snprintf(buf + pos, sizeof(buf) - pos, ...)` into a 3072-byte stack
+ * buffer; the page had outgrown it (3183 bytes), so the last snprintf truncated
+ * and httpd_resp_send() sent 111 bytes of stack past the buffer — and longer
+ * config values would have made `sizeof(buf) - pos` underflow and overrun the
+ * stack. page_appendf() never advances past the end of the buffer. */
+typedef struct {
+    char  *buf;
+    size_t cap;
+    size_t len;
+    bool   truncated;
+} page_t;
+
+static void page_appendf(page_t *p, const char *fmt, ...)
+{
+    if (p->len + 1 >= p->cap) {
+        p->truncated = true;
+        return;
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(p->buf + p->len, p->cap - p->len, fmt, ap);
+    va_end(ap);
+    if (n < 0) return;
+    if ((size_t)n >= p->cap - p->len) {
+        p->len = p->cap - 1;
+        p->truncated = true;
+    } else {
+        p->len += (size_t)n;
+    }
+}
+
+/* Template is ~3.3 KB; escaped config values add at most ~1.1 KB */
+#define SETUP_PAGE_MAX 6144
+
 /* GET /setup — HTML config form pre-filled with current values */
 static esp_err_t setup_get_handler(httpd_req_t *req)
 {
     static const char *res_names[] = {"QVGA (320x240)", "VGA (640x480)", "HD (1280x720)", "UXGA (1600x1200)"};
     static const uint8_t res_vals[] = {6, 10, 13, 15}; // FRAMESIZE_QVGA/VGA/HD/UXGA — PY260-supported only
+    static const char *qual_names[] = {"High (largest files)", "Default", "Low (smallest files)"};
 
     /* Get device IP for display */
     esp_netif_ip_info_t ip_info = {0};
@@ -728,10 +779,14 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
 
     const esp_app_desc_t *app = esp_app_get_description();
 
-    char buf[3072];
-    int pos = 0;
+    page_t page = { .buf = heap_caps_malloc(SETUP_PAGE_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT),
+                    .cap = SETUP_PAGE_MAX };
+    if (!page.buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+        return ESP_FAIL;
+    }
 
-    pos += snprintf(buf + pos, sizeof(buf) - pos,
+    page_appendf(&page,
         "<!DOCTYPE html><html><head><meta charset='utf-8'>"
         "<title>Camera Setup</title>"
         "<style>body{font-family:sans-serif;max-width:500px;margin:40px auto;padding:0 16px}"
@@ -759,7 +814,7 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
     html_escape(pass_esc, config_mgr_get_mqtt_pass(), sizeof(pass_esc));
     html_escape(dev_esc,  config_mgr_get_device_id(), sizeof(dev_esc));
 
-    pos += snprintf(buf + pos, sizeof(buf) - pos,
+    page_appendf(&page,
         "<label><input type='checkbox' name='mqtt_en' value='1' id='mqtt_en'%s> Enable MQTT</label>"
         "<div id='mqtt_fields'>"
         "<label>MQTT URL</label>"
@@ -795,17 +850,28 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
 
     uint8_t cur_res = config_mgr_get_cam_resolution();
     for (int i = 0; i < 4; i++) {
-        pos += snprintf(buf + pos, sizeof(buf) - pos,
+        page_appendf(&page,
             "<option value='%u'%s>%s</option>",
             res_vals[i],
             (cur_res == res_vals[i]) ? " selected" : "",
             res_names[i]);
     }
 
-    pos += snprintf(buf + pos, sizeof(buf) - pos,
+    page_appendf(&page,
         "</select>"
-        "<label>JPEG Quality (1=best, 63=lowest)</label>"
-        "<input type='text' name='jpeg_qual' value='%u'>"
+        "<label>JPEG Quality</label>"
+        "<select name='cam_qual'>");
+
+    /* The PY260 has three fixed compression levels (0 = High, 1 = Default, 2 = Low) */
+    uint8_t cur_qual = config_mgr_get_cam_quality();
+    for (int i = 0; i < 3; i++) {
+        page_appendf(&page,
+            "<option value='%d'%s>%s</option>",
+            i, (cur_qual == i) ? " selected" : "", qual_names[i]);
+    }
+
+    page_appendf(&page,
+        "</select>"
         "<br><input type='submit' value='Save &amp; Restart'>"
         "<script>function tog(){var e=document.getElementById('mqtt_en').checked;"
         "var d=document.getElementById('mqtt_fields');"
@@ -824,29 +890,34 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
         "style='background:#dc2626;color:#fff;border:none;padding:8px 16px;"
         "border-radius:4px;cursor:pointer;font-size:1em'>"
         "</form></details>"
-        "</body></html>",
-        config_mgr_get_jpeg_quality());
+        "</body></html>");
 
+    if (page.truncated) {
+        ESP_LOGW(TAG, "/setup page truncated at %zu bytes — raise SETUP_PAGE_MAX", page.len);
+    }
     httpd_resp_set_type(req, "text/html");
-    return httpd_resp_send(req, buf, pos);
+    esp_err_t ret = httpd_resp_send(req, page.buf, page.len);
+    heap_caps_free(page.buf);
+    return ret;
 }
 
-/* One-shot task: deinit camera, save config, restart */
+/* One-shot task: stage config in RTC RAM, restart. The NVS write happens on the
+ * next boot before Wi-Fi starts (config_mgr_apply_staged) — writing flash here,
+ * with Wi-Fi/MQTT running, risks the cache-disable double exception. */
 static void setup_restart_task(void *arg)
 {
-    vTaskDelay(pdMS_TO_TICKS(500));
-    esp_camera_deinit();
-    config_mgr_save();
+    vTaskDelay(pdMS_TO_TICKS(500));  // let the HTTP response go out first
+    config_mgr_stage_for_reboot();
     recovery_mgr_signal_planned_reboot();
     esp_restart();
 }
 
-/* One-shot task: deinit camera, erase all NVS, restart into BLE provisioning */
+/* One-shot task: stage a factory reset, restart. NVS is erased on the next boot
+ * before Wi-Fi starts, then the device enters BLE provisioning. */
 static void factory_reset_task(void *arg)
 {
-    vTaskDelay(pdMS_TO_TICKS(500));
-    esp_camera_deinit();
-    nvs_flash_erase();
+    vTaskDelay(pdMS_TO_TICKS(500));  // let the HTTP response go out first
+    config_mgr_stage_factory_reset();
     recovery_mgr_signal_planned_reboot();
     esp_restart();
 }
@@ -854,14 +925,14 @@ static void factory_reset_task(void *arg)
 /* POST /setup/factory-reset — erase NVS and reboot into BLE provisioning mode */
 static esp_err_t factory_reset_handler(httpd_req_t *req)
 {
-    ESP_LOGW(TAG, "Factory reset requested — erasing NVS and rebooting");
+    ESP_LOGW(TAG, "Factory reset requested — rebooting to erase NVS");
     char dev_esc[192];
     html_escape(dev_esc, config_mgr_get_device_id(), sizeof(dev_esc));
     char resp_html[512];
     snprintf(resp_html, sizeof(resp_html),
         "<!DOCTYPE html><html><head><meta charset='utf-8'></head><body>"
         "<h2>Factory Reset</h2>"
-        "<p>NVS erased. Device is rebooting into BLE provisioning mode.</p>"
+        "<p>Device is rebooting, erasing all settings, and entering BLE provisioning mode.</p>"
         "<p>Use the <strong>Espressif BLE Provisioning</strong> app to reconnect "
         "(<strong>PROV_%s</strong>), then visit /setup to reconfigure.</p>"
         "</body></html>",
@@ -905,7 +976,7 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
     char cd_token[64]   = {0};
     bool mqtt_en        = false;
     char cam_res_s[8]   = {0};
-    char jpeg_qual_s[8] = {0};
+    char cam_qual_s[8]  = {0};
 
     char *saveptr = NULL;
     char *pair = strtok_r(body, "&", &saveptr);
@@ -926,7 +997,7 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
             else if (strcmp(key, "cd_token")  == 0) strlcpy(cd_token,    decoded, sizeof(cd_token));
             else if (strcmp(key, "mqtt_en")   == 0) mqtt_en = (decoded[0] == '1');
             else if (strcmp(key, "cam_res")   == 0) strlcpy(cam_res_s,   decoded, sizeof(cam_res_s));
-            else if (strcmp(key, "jpeg_qual") == 0) strlcpy(jpeg_qual_s, decoded, sizeof(jpeg_qual_s));
+            else if (strcmp(key, "cam_qual")  == 0) strlcpy(cam_qual_s,  decoded, sizeof(cam_qual_s));
         }
         pair = strtok_r(NULL, "&", &saveptr);
     }
@@ -936,9 +1007,9 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "device_id must not be empty");
         return ESP_FAIL;
     }
-    int jpeg_qual = atoi(jpeg_qual_s);
-    if (jpeg_qual < 1 || jpeg_qual > 63) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "jpeg_qual must be 1-63");
+    int cam_qual = atoi(cam_qual_s);
+    if (cam_qual_s[0] == '\0' || cam_qual < 0 || cam_qual > 2) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "cam_qual must be 0-2");
         return ESP_FAIL;
     }
     int cam_res = atoi(cam_res_s);
@@ -956,10 +1027,10 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
     if (cd_token[0])  config_mgr_set_coredump_token(cd_token);
     config_mgr_set_mqtt_enabled(mqtt_en);
     config_mgr_set_cam_resolution((uint8_t)cam_res);
-    config_mgr_set_jpeg_quality((uint8_t)jpeg_qual);
+    config_mgr_set_cam_quality((uint8_t)cam_qual);
 
     ESP_LOGI(TAG, "Setup POST: url=%s user=%s dev=%s mqtt_en=%d res=%d qual=%d",
-             mqtt_url, mqtt_user, device_id, mqtt_en, cam_res, jpeg_qual);
+             mqtt_url, mqtt_user, device_id, mqtt_en, cam_res, cam_qual);
 
     /* Send response before restarting */
     static const char *resp_html =

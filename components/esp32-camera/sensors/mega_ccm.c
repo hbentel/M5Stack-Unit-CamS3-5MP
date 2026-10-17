@@ -220,6 +220,7 @@ static int set_brightness(sensor_t *sensor, int level)
         break;
     }
     if (ret == 0) {
+        sensor->status.brightness = level;
         ESP_LOGD(TAG, "Set brightness to: %d", level);
     }
     return ret;
@@ -260,6 +261,7 @@ static int set_contrast(sensor_t *sensor, int level)
         break;
     }
     if (ret == 0) {
+        sensor->status.contrast = level;
         ESP_LOGD(TAG, "Set contrast to: %d", level);
     }
     return ret;
@@ -305,6 +307,7 @@ static int set_saturation(sensor_t *sensor, int level)
         break;
     }
     if (ret == 0) {
+        sensor->status.saturation = level;
         ESP_LOGD(TAG, "Set saturation to: %d", level);
     }
     return ret;
@@ -345,6 +348,7 @@ static int set_exposure_ctrl(sensor_t *sensor, int enable)
         break;
     }
     if (ret == 0) {
+        sensor->status.ae_level = enable;
         ESP_LOGD(TAG, "Set exposure to: %d", enable);
     }
     return ret;
@@ -378,6 +382,7 @@ static int set_wb_mode (sensor_t *sensor, int mode)
         break;
     }
     if (ret == 0) {
+        sensor->status.wb_mode = mode;
         ESP_LOGD(TAG, "Set AWB_mode to: %d", mode);
     }
     return ret;
@@ -417,6 +422,7 @@ static int set_special_effect (sensor_t *sensor, int effect)
         break;
     }
     if (ret == 0) {
+        sensor->status.special_effect = effect;
         ESP_LOGD(TAG, "Set special effect to: %d", effect);
     }
     return ret;
@@ -436,9 +442,17 @@ static int set_quality (sensor_t *sensor, int quality)
              ret = write_reg(sensor->slv_addr, IMAGE_QUALITY_REG, 0x01); 
         break;
         case quality_low:
-             ret = write_reg(sensor->slv_addr, IMAGE_QUALITY_REG, 0x02); 
+             ret = write_reg(sensor->slv_addr, IMAGE_QUALITY_REG, 0x02);
+        break;
+        default:
+            ESP_LOGW(TAG, "Invalid quality  : %d", quality);
+            ret = -1;
         break;
      }
+    if (ret == 0) {
+        sensor->status.quality = quality;
+        ESP_LOGD(TAG, "Set quality to: %d", quality);
+    }
     return ret;
 }
 

@@ -162,8 +162,8 @@ coredump    0xA20000 128KB  ← ELF format, download via GET /api/coredump
 | Task | Files |
 |------|-------|
 | Change Wi-Fi credentials | Flash device fresh (clears NVS) or erase `wifi_prov` NVS key; device re-enters BLE provisioning on next boot |
-| Change camera resolution/quality | `main/main.c` — `CAM_FRAME_SIZE`, `jpeg_quality` in `camera_config` |
-| Change image settings (brightness/WB/etc.) | `main/main.c` — `CAM_*` defines + `apply_camera_settings()` |
+| Change camera resolution/quality | `/setup` page (persisted via `config_mgr`); quality is the PY260's 3-level `set_quality` (0=High, 1=Default, 2=Low), not `camera_config.jpeg_quality` |
+| Change image settings (brightness/WB/etc.) | `main/main.c` — `CAM_*` defines + `apply_camera_settings()`. PY260 levels are 0-based indices with mid-range defaults (brightness 4 of 0–8, contrast/saturation 3 of 0–6) |
 | Add HTTP endpoint | `components/http_server/http_server.c` — add handler + register in `start_http_server()` |
 | Add MQTT sensor to HA | `components/mqtt_mgr/mqtt_mgr.c` — `send_ha_discovery()` + `mqtt_telemetry_task()` |
 | Tune camera recovery | `components/recovery_mgr/recovery_mgr.c` — `recovery_config_t` defaults |

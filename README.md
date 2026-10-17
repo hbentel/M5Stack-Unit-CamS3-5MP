@@ -216,9 +216,9 @@ http://<device-ip>/setup
 | Coredump Token | If set, `GET /api/coredump` requires `Authorization: Bearer <this>` | _(empty — auth disabled)_ |
 | Enable MQTT | Toggle MQTT on/off | enabled |
 | Camera Resolution | QVGA / VGA / HD / UXGA | VGA (640×480) |
-| JPEG Quality | 1 (best) – 63 (lowest) | 12 |
+| JPEG Quality | High / Default / Low (the PY260's three compression levels) | Default |
 
-Submit the form — the device saves the values to NVS and reboots. Settings persist
+Submit the form — the device reboots and saves the values to NVS early in the next boot, before Wi-Fi starts. Settings persist
 across power cycles and OTA updates.
 
 > **Compile-time defaults** for MQTT URL, username, password, and device ID can be
@@ -336,10 +336,10 @@ All topics use the **Device ID** as a prefix (default: `unitcams3`).
 
 | Topic | Payload | Effect |
 |-------|---------|--------|
-| `unitcams3/brightness/set` | `0` to `8` | Set sensor brightness |
-| `unitcams3/contrast/set` | `0` to `6` | Set sensor contrast |
-| `unitcams3/saturation/set` | `0` to `6` | Set sensor saturation |
-| `unitcams3/wb_mode/set` | `0`–`4` | White balance (0=Auto, 1=Sun, 2=Cloud, 3=Office, 4=Home) |
+| `unitcams3/brightness/set` | `0` to `8` | Set sensor brightness (4 = default) |
+| `unitcams3/contrast/set` | `0` to `6` | Set sensor contrast (3 = default) |
+| `unitcams3/saturation/set` | `0` to `6` | Set sensor saturation (3 = default) |
+| `unitcams3/wb_mode/set` | `0`–`4` | White balance (0=Auto, 1=Sunny, 2=Office, 3=Cloudy, 4=Home) |
 | `unitcams3/fps_cap/set` | `0`–`15` | Broadcaster FPS cap (0 = unlimited); not persisted |
 | `unitcams3/led/set` | `1` / `0` | LED on / off |
 | `unitcams3/restart` | _(any)_ | Trigger `esp_restart()` |

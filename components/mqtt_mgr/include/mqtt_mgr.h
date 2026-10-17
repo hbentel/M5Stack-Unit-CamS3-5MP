@@ -26,6 +26,13 @@ esp_err_t mqtt_mgr_start(const char *broker_url, const char *username, const cha
 esp_err_t mqtt_mgr_publish(const char *topic_suffix, const char *value);
 
 /**
+ * @brief Publish the sensor's current brightness/contrast/saturation/wb_mode
+ *        levels (retained) to their state topics.
+ *        No-op if MQTT is not connected or the camera is not initialized.
+ */
+void mqtt_mgr_publish_camera_state(void);
+
+/**
  * @brief Stop the MQTT Manager (disconnects and stops tasks).
  */
 void mqtt_mgr_stop(void);

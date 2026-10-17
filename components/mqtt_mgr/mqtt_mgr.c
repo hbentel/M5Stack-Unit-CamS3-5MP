@@ -137,7 +137,7 @@ static void send_ha_discovery(void)
     // AWB Mode (Switch? or Select? Number is easiest for now: 0=Auto, 1=Sunny, etc)
     snprintf(state_topic, sizeof(state_topic), "%s/wb_mode", base_topic);
     snprintf(cmd_topic, sizeof(cmd_topic), "%s/wb_mode/set", base_topic);
-    publish_discovery("number", "wb_mode", "WB Mode (0=Auto,1=Sun,2=Cloud,3=Office,4=Home)", NULL, NULL, cmd_topic, state_topic, 0, 4);
+    publish_discovery("number", "wb_mode", "WB Mode (0=Auto,1=Sunny,2=Office,3=Cloudy,4=Home)", NULL, NULL, cmd_topic, state_topic, 0, 4);
     
     // PSRAM Free
     snprintf(state_topic, sizeof(state_topic), "%s/psram_free", base_topic);
@@ -190,6 +190,28 @@ static void send_ha_discovery(void)
     publish_discovery("button", "restart", "Restart Camera", "restart", NULL, cmd_topic, NULL, 0, 0);
 }
 
+// Publish the image-control levels the sensor is actually using (retained), as
+// recorded by the mega_ccm setters in sensor->status.
+void mqtt_mgr_publish_camera_state(void)
+{
+    sensor_t *s = esp_camera_sensor_get();
+    if (!s_connected || !client || !s) return;
+
+    const struct { const char *suffix; int value; } state[] = {
+        {"brightness", s->status.brightness},
+        {"contrast",   s->status.contrast},
+        {"saturation", s->status.saturation},
+        {"wb_mode",    s->status.wb_mode},
+    };
+    char topic[128];
+    char payload[8];
+    for (size_t i = 0; i < sizeof(state) / sizeof(state[0]); i++) {
+        snprintf(topic, sizeof(topic), "%s/%s", base_topic, state[i].suffix);
+        snprintf(payload, sizeof(payload), "%d", state[i].value);
+        esp_mqtt_client_publish(client, topic, payload, 0, 1, 1);
+    }
+}
+
 // ========================================
 // Command Handling
 // ========================================
@@ -216,22 +238,20 @@ static void handle_command(const char *topic_ptr, int topic_len, const char *dat
 
     char state_topic[128];
 
+    // Image controls: publish the level the sensor recorded rather than echoing
+    // the payload, so clamped or rejected values don't desync Home Assistant.
     if (strstr(topic, "brightness/set")) {
         if (s->set_brightness) s->set_brightness(s, val);
-        snprintf(state_topic, sizeof(state_topic), "%s/brightness", base_topic);
-        esp_mqtt_client_publish(client, state_topic, val_str, 0, 0, 0);
+        mqtt_mgr_publish_camera_state();
     } else if (strstr(topic, "contrast/set")) {
         if (s->set_contrast) s->set_contrast(s, val);
-        snprintf(state_topic, sizeof(state_topic), "%s/contrast", base_topic);
-        esp_mqtt_client_publish(client, state_topic, val_str, 0, 0, 0);
+        mqtt_mgr_publish_camera_state();
     } else if (strstr(topic, "saturation/set")) {
         if (s->set_saturation) s->set_saturation(s, val);
-        snprintf(state_topic, sizeof(state_topic), "%s/saturation", base_topic);
-        esp_mqtt_client_publish(client, state_topic, val_str, 0, 0, 0);
+        mqtt_mgr_publish_camera_state();
     } else if (strstr(topic, "wb_mode/set")) {
         if (s->set_wb_mode) s->set_wb_mode(s, val);
-        snprintf(state_topic, sizeof(state_topic), "%s/wb_mode", base_topic);
-        esp_mqtt_client_publish(client, state_topic, val_str, 0, 0, 0);
+        mqtt_mgr_publish_camera_state();
     } else if (strstr(topic, "ota/set")) {
         char raw[300];
         int raw_len = (orig_data_len < (int)sizeof(raw) - 1) ? orig_data_len : (int)sizeof(raw) - 1;
@@ -467,17 +487,13 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         snprintf(cmd_sub, sizeof(cmd_sub), "%s/fps_cap/set", base_topic);
         esp_mqtt_client_subscribe(client, cmd_sub, 0);
 
-        // Publish Initial State
-        char topic[128];
-        snprintf(topic, sizeof(topic), "%s/brightness", base_topic);
-        esp_mqtt_client_publish(client, topic, "0", 0, 1, 1);
-        snprintf(topic, sizeof(topic), "%s/contrast", base_topic);
-        esp_mqtt_client_publish(client, topic, "0", 0, 1, 1);
-        snprintf(topic, sizeof(topic), "%s/saturation", base_topic);
-        esp_mqtt_client_publish(client, topic, "0", 0, 1, 1);
-        snprintf(topic, sizeof(topic), "%s/wb_mode", base_topic);
-        esp_mqtt_client_publish(client, topic, "0", 0, 1, 1);
+        // Publish initial image-control state. MQTT usually connects before the
+        // camera is initialized; in that case this is a no-op and main.c's
+        // apply_camera_settings() publishes the state once the sensor is up.
+        mqtt_mgr_publish_camera_state();
+
         // Fix Unknown sensors: publish placeholder values until telemetry loop fires
+        char topic[128];
         snprintf(topic, sizeof(topic), "%s/ota_status", base_topic);
         esp_mqtt_client_publish(client, topic, "idle", 0, 1, 1);
         snprintf(topic, sizeof(topic), "%s/recovery_count", base_topic);

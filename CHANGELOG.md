@@ -5,6 +5,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Image settings applied at their minimum, not neutral** — `main.c` assumed an
+  OV-style −2..+2 scale with 0 = normal, but the PY260 driver takes 0-based level
+  indices with mid-range defaults. Every boot set brightness −4 and contrast and
+  saturation −3; `CAM_AEC=1` actually set exposure compensation +1, and
+  `CAM_WB_MODE=3` selected Cloudy, not Office. Defaults now use the driver's own
+  scale (brightness 4, contrast 3, saturation 3, exposure comp 0, WB Office).
+- **MQTT/HA image-control state** — the device published a hardcoded `0` for
+  brightness/contrast/saturation/WB on connect and echoed raw command payloads.
+  The driver now records applied levels in `sensor->status`, and those are what
+  get published. HA's WB label corrected to the driver's mapping.
+- **JPEG quality setting had no effect** — the 1–63 `/setup` value was stored but
+  never sent to the sensor, which only has three levels. `/setup` now offers
+  High / Default / Low and the level is applied at camera init; saved legacy
+  values map to Default.
+- **Frame pool overflow at HD/UXGA** — camera buffers are 768 KB–1 MB at those
+  resolutions but pool slots are 512 KB, and the broadcaster copied without a
+  bounds check. Oversized frames are now dropped and counted
+  (`oversize_drops` in `/stats`).
+- **Flash writes with Wi-Fi running** — `/setup` save (`nvs_commit`) and factory
+  reset (`nvs_flash_erase`) ran with Wi-Fi/MQTT live, the pattern behind the
+  v0.2.5/v0.2.7 crashes. Both are now staged in `RTC_NOINIT` RAM and committed
+  on the next boot before Wi-Fi starts (`config_mgr_apply_staged()`).
+- **`/setup` page overran its stack buffer** — the page (3183 B) had outgrown its
+  3072 B buffer, so the response sent 111 bytes of stack past the end, and longer
+  config values could overrun the stack. Now built in a bounded heap buffer.
+
+---
+
 ## [v0.2.7] — 2026-06-23
 
 ### Fixed
