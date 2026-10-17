@@ -51,18 +51,32 @@ has free slots even with a snapshot and multiple workers active.
 These are physical limits of the PY260 sensor and the ESP32-S3 OPI PSRAM bus.
 Changing them will break the firmware.
 
-### XCLK = 10 MHz — do not increase
+### XCLK: 10, 16 or 20 MHz (selectable, default 10)
 
-The PY260's vertical front porch is approximately 3 μs at 10 MHz.
+The sensor's frame rate scales linearly with XCLK. Measured 2026-10-17 on the
+current driver:
 
-| XCLK | Front porch | Result |
-|------|-------------|--------|
-| 10 MHz | ~3 μs | Stable — 0 NO-SOI |
-| 16 MHz | ~1.875 μs | Double-exception crash |
-| 20 MHz | ~1.5 μs | 96% NO-SOI flood |
+| XCLK | Sensor fps (VGA) | Frame errors | Notes |
+|------|------------------|--------------|-------|
+| 10 MHz | 9.4 | 0 | Default. Most exposure time per frame. |
+| 16 MHz | 15.0 | 0 | |
+| 20 MHz | 18.8 | 0 (5-min soak) | |
 
-At higher XCLK the ISR cannot reach the GDMA before the sensor's sync window closes,
-causing every captured buffer to start mid-frame with no JPEG SOI marker.
+XCLK is set on `/setup` (`config_mgr` key `xclk_mhz`) and must divide the 160 MHz
+LCD_CAM source clock (`ll_cam_config()` rejects other values). If the previous boot
+crashed, a non-default clock falls back to 10 MHz for that boot.
+
+**Why 10 MHz is still the default:** Frigate's detector needs only ~5–6 fps, and
+the network path (~1.5 MB/s at the current TCP send buffer) already delivers ~9 fps
+of ~140–180 KB frames, so a faster sensor does not reach Frigate. A faster clock also
+gives the sensor less exposure time per frame (night brightness not yet measured).
+
+**History:** this used to be documented as a physical ceiling caused by the PY260's
+"~3 μs vertical front porch" — 16 MHz crashed and 20 MHz produced a 96% NO-SOI flood.
+Those failures were driver bugs, not sensor limits: after the 2026-10-16 fix to the
+`cam_reset_and_free_frame()` buffer leak, both run error-free. (Capture re-armed
+5–10 ms after VSYNC also never missed an SOI over 11.8M frames, which contradicts the
+front-porch explanation.)
 
 ### PSRAM at 40 MHz — do not increase
 

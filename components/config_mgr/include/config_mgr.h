@@ -22,6 +22,7 @@ const char *config_mgr_get_device_id(void);
 bool        config_mgr_is_mqtt_enabled(void);
 uint8_t     config_mgr_get_cam_resolution(void);   /* framesize_t value */
 uint8_t     config_mgr_get_cam_quality(void);      /* 0 = High, 1 = Default, 2 = Low */
+uint8_t     config_mgr_get_xclk_mhz(void);         /* camera XCLK: 10 (default), 16 or 20 */
 const char *config_mgr_get_ota_token(void);
 const char *config_mgr_get_coredump_token(void);
 
@@ -33,6 +34,7 @@ void config_mgr_set_device_id(const char *v);
 void config_mgr_set_mqtt_enabled(bool v);
 void config_mgr_set_cam_resolution(uint8_t v);
 void config_mgr_set_cam_quality(uint8_t v);
+void config_mgr_set_xclk_mhz(uint8_t v);
 void config_mgr_set_ota_token(const char *v);
 void config_mgr_set_coredump_token(const char *v);
 

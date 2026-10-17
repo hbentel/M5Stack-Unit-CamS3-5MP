@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Selectable camera clock (XCLK) 10 / 16 / 20 MHz** on `/setup` (default 10;
+  `xclk_mhz` in `/stats`). Measured at VGA: 9.4 / 15.0 / 18.8 fps sensor rate, zero
+  frame errors (20 MHz soaked 5 min). The former "10 MHz physical ceiling" was a driver
+  bug (the buffer leak fixed 2026-10-16). 10 MHz stays the default: Frigate detects at
+  ~5–6 fps and the network already caps delivery at ~9 fps; faster clocks also shorten
+  per-frame exposure. If the previous boot crashed, a non-default clock falls back to
+  10 MHz for that boot.
 - **Wi-Fi disconnect reasons in `/stats`** — `wifi.disconnect_reasons` counts
   disconnects per `wifi_err_reason_t` since boot, to diagnose recurring drops.
 - **Effect control in Home Assistant** — `unitcams3/effect/set` (0–6, 3 = B&W),

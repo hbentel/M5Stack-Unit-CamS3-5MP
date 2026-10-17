@@ -24,7 +24,10 @@
 #include "nvs_flash.h"
 #include "esp_wifi.h"
 
-// 10MHz: hard ceiling — PY260 front porch too short at 16/20MHz regardless of ISR weight
+// Default/fallback camera XCLK. The sensor frame rate scales with it (VGA: 10 MHz
+// ~9.4 fps, 16 MHz ~15 fps, 20 MHz ~18.8 fps — all error-free since the 2026-10-16
+// driver buffer-leak fix). Selectable on /setup (config_mgr); 10 MHz gives the most
+// exposure time per frame, and Frigate's detector needs only ~5-6 fps.
 #define CAM_XCLK_FREQ_HZ 10000000
 
 // Resolution Configuration: FRAMESIZE_VGA, FRAMESIZE_SVGA, FRAMESIZE_XVGA, FRAMESIZE_UXGA
@@ -143,6 +146,12 @@ static void apply_camera_settings(const camera_status_t *keep)
 }
 
 SemaphoreHandle_t g_camera_reinit_mutex = NULL;
+
+// Current camera XCLK in MHz, for /stats (http_server.c)
+int xclk_current_mhz(void)
+{
+    return camera_config.xclk_freq_hz / 1000000;
+}
 
 // Levels to restore on the next camera_reinit() when the camera was deinitialized
 // on purpose beforehand (so there is no live sensor status to copy).
@@ -432,6 +441,13 @@ void app_main(void)
      */
     ESP_LOGI(TAG, "--- Initializing Camera Driver ---");
     camera_config.frame_size = config_mgr_get_cam_resolution();
+    camera_config.xclk_freq_hz = config_mgr_get_xclk_mhz() * 1000000;
+    if (camera_config.xclk_freq_hz != CAM_XCLK_FREQ_HZ && recovery_mgr_get_crash_count() > 0) {
+        // The previous boot crashed: don't risk the faster clock again until stable.
+        ESP_LOGW(TAG, "Previous boot crashed — using %d MHz XCLK this boot instead of %d MHz",
+                 CAM_XCLK_FREQ_HZ / 1000000, camera_config.xclk_freq_hz / 1000000);
+        camera_config.xclk_freq_hz = CAM_XCLK_FREQ_HZ;
+    }
     s_cam_quality            = config_mgr_get_cam_quality();
     bool safe_mode = recovery_mgr_is_safe_mode();
     if (safe_mode) {

@@ -64,7 +64,7 @@ The VSYNC ISR has two hard requirements that must not be removed:
 
 ### Hard Hardware Constraints
 
-- **XCLK = 10MHz — do not increase.** The PY260's vertical front porch is ~3μs at 10MHz. At 16MHz it's ~1.875μs (causes double exception crash), at 20MHz ~1.5μs (96% NO-SOI flood). 10MHz is a physical sensor ceiling. (Caveat, 2026-10-16: capture re-armed 5–10 ms after VSYNC never missed an SOI over 11.8M frames, so the "~3μs front porch" explanation is unconfirmed — the 16/20 MHz failures are real, their cause may differ.)
+- **XCLK: 10 (default), 16 or 20 MHz** — selectable on `/setup` (`config_mgr_get_xclk_mhz()`); must divide 160 MHz. Sensor fps scales with it (VGA: 9.4 / 15.0 / 18.8), all error-free since the 2026-10-16 buffer-leak fix. The old "10 MHz physical ceiling / ~3μs front porch" claim was wrong — the 16/20 MHz failures were that driver bug. Keep 10 MHz as default: Frigate detects at ~5–6 fps, the network already caps delivery at ~9 fps of VGA frames, and higher clocks shorten per-frame exposure. A crash on the previous boot forces 10 MHz for the next boot.
 - **PSRAM at 40MHz** — not 80MHz. Higher speed causes OPI bus contention with camera DMA.
 - **Task Stacks in Internal RAM** — `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=n` is mandatory. Stacks in PSRAM cause Double Exception crashes during flash writes (NVS/OTA).
 - **Main Task Stack = 16KB** — required for heavy initialization.

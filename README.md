@@ -217,6 +217,7 @@ http://<device-ip>/setup
 | Enable MQTT | Toggle MQTT on/off | enabled |
 | Camera Resolution | QVGA / VGA / HD / UXGA | VGA (640×480) |
 | JPEG Quality | High / Default / Low (the PY260's three compression levels) | Default |
+| Camera Clock | 10 / 16 / 20 MHz XCLK (~9 / 15 / 19 fps at VGA). Higher = more frames, less exposure per frame | 10 MHz |
 
 Submit the form — the device reboots and saves the values to NVS early in the next boot, before Wi-Fi starts. Settings persist
 across power cycles and OTA updates.
@@ -445,10 +446,10 @@ from a software reset alone.
 
 ### NO-SOI flood (camera produces corrupt frames)
 **Symptom:** `no_soi` counter climbs rapidly in `/stats` or MQTT.
-**Cause:** XCLK frequency is too high. The PY260 vertical front porch is ~3 μs at
-10 MHz; higher XCLK causes the ISR to miss the sync window.
-**Fix:** XCLK is already hardcoded to 10 MHz in `main/main.c`. Do not increase it.
-If you see NO-SOI errors, check that `CAM_XCLK_FREQ_HZ` is `10000000`.
+**Cause:** frames are captured without their JPEG start marker. Historically this
+happened at 20 MHz XCLK because of a driver bug (fixed 2026-10-16).
+**Fix:** set **Camera Clock** on `/setup` back to 10 MHz (check `xclk_mhz` in
+`/stats`) and report the issue with `/api/logs` attached.
 
 ### Device not advertising BLE / already provisioned
 **Symptom:** App cannot find `PROV_unitcams3`.
@@ -480,10 +481,13 @@ on the next boot via an RTC NOINIT flag.
 
 ## Architecture Notes
 
-### XCLK 10 MHz ceiling
-The PY260's vertical front porch is approximately 3 μs at 10 MHz. At 16 MHz it
-shrinks to ~1.875 μs, causing double-exception crashes; at 20 MHz it is ~1.5 μs
-(96% NO-SOI flood). **10 MHz is a physical sensor ceiling — do not increase it.**
+### Camera clock (XCLK): 10, 16 or 20 MHz
+The sensor frame rate scales with XCLK: ~9.4 fps at 10 MHz (default), ~15 at 16 MHz,
+~18.8 at 20 MHz at VGA, all error-free on the current driver. Choose it on `/setup`.
+10 MHz remains the default because Frigate's detector needs only ~5–6 fps, the
+network delivers ~9 fps of VGA frames anyway, and a faster clock leaves less exposure
+time per frame. (This used to be documented as a hard 10 MHz ceiling; the 16/20 MHz
+failures behind that turned out to be a driver bug, fixed 2026-10-16.)
 
 ### Core 1 ISR requirement
 The VSYNC ISR must run on Core 1. Wi-Fi IRQs run on Core 0 and can delay an ISR

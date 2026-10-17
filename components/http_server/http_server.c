@@ -94,6 +94,7 @@ uint32_t http_server_get_reinit_count(void) { return atomic_load(&s_reinit_count
 
 // Forward declaration - defined in main.c
 extern esp_err_t camera_reinit(void);
+extern int xclk_current_mhz(void);        // main.c
 
 // Boot timestamp for uptime calculation
 static int64_t s_boot_time_us;
@@ -307,7 +308,8 @@ static esp_err_t stats_handler(httpd_req_t *req)
             "\"http_task_words\":%lu,"
             "\"worker_min_words\":%lu"
         "},"
-        "\"fps_cap\":%u"
+        "\"fps_cap\":%u,"
+        "\"xclk_mhz\":%d"
         "}",
         (long long)uptime_s,
         vsync_fps, broadcast_fps,
@@ -331,7 +333,8 @@ static esp_err_t stats_handler(httpd_req_t *req)
         (unsigned long)s_broadcaster_hwm_words,
         (unsigned long)http_task_hwm,
         (unsigned long)worker_hwm_min,
-        (unsigned)atomic_load(&s_fps_cap));
+        (unsigned)atomic_load(&s_fps_cap),
+        xclk_current_mhz());
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -965,6 +968,8 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
     static const char *res_names[] = {"QVGA (320x240)", "VGA (640x480)", "HD (1280x720)", "UXGA (1600x1200)"};
     static const uint8_t res_vals[] = {6, 10, 13, 15}; // FRAMESIZE_QVGA/VGA/HD/UXGA — PY260-supported only
     static const char *qual_names[] = {"High (largest files)", "Default", "Low (smallest files)"};
+    static const uint8_t xclk_vals[] = {10, 16, 20};
+    static const char *xclk_names[] = {"10 MHz (~9 fps, default)", "16 MHz (~15 fps)", "20 MHz (~19 fps)"};
 
     /* Get device IP for display */
     esp_netif_ip_info_t ip_info = {0};
@@ -1068,6 +1073,17 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
 
     page_appendf(&page,
         "</select>"
+        "<label>Camera Clock (frame rate)</label>"
+        "<select name='xclk'>");
+    uint8_t cur_xclk = config_mgr_get_xclk_mhz();
+    for (int i = 0; i < 3; i++) {
+        page_appendf(&page, "<option value='%u'%s>%s</option>",
+                     xclk_vals[i], (cur_xclk == xclk_vals[i]) ? " selected" : "", xclk_names[i]);
+    }
+    page_appendf(&page,
+        "</select>"
+        "<p style='font-size:0.85em;color:#6b7280;margin:4px 0 0'>Higher clocks give more frames but "
+        "less exposure per frame (darker at night). Frigate detection needs ~5 fps.</p>"
         "<br><input type='submit' value='Save &amp; Restart'>"
         "<script>function tog(){var e=document.getElementById('mqtt_en').checked;"
         "var d=document.getElementById('mqtt_fields');"
@@ -1173,6 +1189,7 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
     bool mqtt_en        = false;
     char cam_res_s[8]   = {0};
     char cam_qual_s[8]  = {0};
+    char xclk_s[8]      = {0};
 
     char *saveptr = NULL;
     char *pair = strtok_r(body, "&", &saveptr);
@@ -1194,6 +1211,7 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
             else if (strcmp(key, "mqtt_en")   == 0) mqtt_en = (decoded[0] == '1');
             else if (strcmp(key, "cam_res")   == 0) strlcpy(cam_res_s,   decoded, sizeof(cam_res_s));
             else if (strcmp(key, "cam_qual")  == 0) strlcpy(cam_qual_s,  decoded, sizeof(cam_qual_s));
+            else if (strcmp(key, "xclk")      == 0) strlcpy(xclk_s,      decoded, sizeof(xclk_s));
         }
         pair = strtok_r(NULL, "&", &saveptr);
     }
@@ -1206,6 +1224,11 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
     int cam_qual = atoi(cam_qual_s);
     if (cam_qual_s[0] == '\0' || cam_qual < 0 || cam_qual > 2) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "cam_qual must be 0-2");
+        return ESP_FAIL;
+    }
+    int xclk = atoi(xclk_s);
+    if (xclk != 10 && xclk != 16 && xclk != 20) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "xclk must be 10, 16 or 20");
         return ESP_FAIL;
     }
     int cam_res = atoi(cam_res_s);
@@ -1224,9 +1247,10 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
     config_mgr_set_mqtt_enabled(mqtt_en);
     config_mgr_set_cam_resolution((uint8_t)cam_res);
     config_mgr_set_cam_quality((uint8_t)cam_qual);
+    config_mgr_set_xclk_mhz((uint8_t)xclk);
 
-    ESP_LOGI(TAG, "Setup POST: url=%s user=%s dev=%s mqtt_en=%d res=%d qual=%d",
-             mqtt_url, mqtt_user, device_id, mqtt_en, cam_res, cam_qual);
+    ESP_LOGI(TAG, "Setup POST: url=%s user=%s dev=%s mqtt_en=%d res=%d qual=%d xclk=%d",
+             mqtt_url, mqtt_user, device_id, mqtt_en, cam_res, cam_qual, xclk);
 
     /* Send response before restarting */
     static const char *resp_html =

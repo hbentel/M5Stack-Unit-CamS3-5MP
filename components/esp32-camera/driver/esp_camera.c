@@ -1,7 +1,8 @@
 // Copyright 2015-2016 Espressif Systems (Shanghai) PTE LTD
 // Licensed under the Apache License, Version 2.0
 //
-// Stripped to MEGA_CCM (PY260) only, JPEG-only, XCLK locked to 10MHz.
+// Stripped to MEGA_CCM (PY260) only, JPEG-only. XCLK comes from camera_config_t
+// (10/16/20 MHz verified; must divide the 160 MHz LCD_CAM source clock).
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,9 +23,6 @@
 
 #include "esp_log.h"
 static const char *TAG = "camera";
-
-/* XCLK is fixed at 10MHz for the PY260 */
-#define PY260_XCLK_FREQ_HZ  10000000
 
 typedef struct {
     sensor_t sensor;
@@ -117,7 +115,7 @@ static esp_err_t camera_probe(const camera_config_t *config, camera_model_t *out
 
     ESP_LOGI(TAG, "Detected camera at address=0x%02x", slv_addr);
     s_state->sensor.slv_addr = slv_addr;
-    s_state->sensor.xclk_freq_hz = PY260_XCLK_FREQ_HZ;
+    s_state->sensor.xclk_freq_hz = config->xclk_freq_hz;
 
     sensor_id_t *id = &s_state->sensor.id;
     for (size_t i = 0; i < sizeof(g_sensors) / sizeof(sensor_func_t); i++) {
