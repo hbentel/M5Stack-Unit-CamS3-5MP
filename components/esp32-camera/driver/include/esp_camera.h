@@ -232,20 +232,6 @@ void esp_camera_fb_return(camera_fb_t * fb);
 sensor_t * esp_camera_sensor_get(void);
 
 /**
- * @brief Save camera settings to non-volatile-storage (NVS)
- *
- * @param key   A unique nvs key name for the camera settings
- */
-esp_err_t esp_camera_save_to_nvs(const char *key);
-
-/**
- * @brief Load camera settings from non-volatile-storage (NVS)
- *
- * @param key   A unique nvs key name for the camera settings
- */
-esp_err_t esp_camera_load_from_nvs(const char *key);
-
-/**
  * @brief Return all frame buffers to be reused again.
  */
 void esp_camera_return_all(void);

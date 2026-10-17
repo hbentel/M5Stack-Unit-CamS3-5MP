@@ -19,6 +19,11 @@ static const char *TAG = "config_mgr";
 #define KEY_CAM_RES    "cam_res"
 #define KEY_CAM_QUAL   "jpeg_qual"   /* key name kept for NVS compatibility */
 #define KEY_XCLK_MHZ   "xclk_mhz"
+#define KEY_IMG_BRIGHT "img_bright"
+#define KEY_IMG_CONTR  "img_contr"
+#define KEY_IMG_SAT    "img_sat"
+#define KEY_IMG_WB     "img_wb"
+#define KEY_IMG_FX     "img_fx"
 #define KEY_OTA_TOKEN  "ota_token"
 #define KEY_CD_TOKEN   "cd_token"
 
@@ -38,6 +43,18 @@ static const char *TAG = "config_mgr";
  * Must divide the 160 MHz LCD_CAM source clock. Higher clocks give the sensor less
  * exposure time per frame and more frames than Frigate's detector needs. */
 #define DEFAULT_XCLK_MHZ  10
+
+/* Image defaults applied at boot, in PY260 driver levels (mega_ccm.c):
+ * brightness 0..8 (4 = neutral), contrast/saturation 0..6 (3 = neutral),
+ * wb 0..4 (0 Auto, 1 Sunny, 2 Office, 3 Cloudy, 4 Home), effect 0..6 (3 = B&W). */
+typedef struct { const char *key; uint8_t def, max; } img_field_t;
+static const img_field_t IMG_FIELDS[CONFIG_IMG_COUNT] = {
+    [CONFIG_IMG_BRIGHTNESS] = {KEY_IMG_BRIGHT, 4, 8},
+    [CONFIG_IMG_CONTRAST]   = {KEY_IMG_CONTR,  3, 6},
+    [CONFIG_IMG_SATURATION] = {KEY_IMG_SAT,    3, 6},
+    [CONFIG_IMG_WB_MODE]    = {KEY_IMG_WB,     2, 4},
+    [CONFIG_IMG_EFFECT]     = {KEY_IMG_FX,     0, 6},
+};
 #define CAM_QUAL_MAX      2
 
 /* In-memory config state */
@@ -51,6 +68,7 @@ static bool    s_mqtt_en;
 static uint8_t s_cam_res;
 static uint8_t s_cam_qual;
 static uint8_t s_xclk_mhz;
+static uint8_t s_img[CONFIG_IMG_COUNT];
 
 static bool s_initialized = false;
 
@@ -127,6 +145,7 @@ esp_err_t config_mgr_init(void)
         s_cam_res  = DEFAULT_CAM_RES;
         s_cam_qual = DEFAULT_CAM_QUAL;
         s_xclk_mhz = DEFAULT_XCLK_MHZ;
+        for (int i = 0; i < CONFIG_IMG_COUNT; i++) s_img[i] = IMG_FIELDS[i].def;
         s_initialized = true;
         return ESP_OK;
     }
@@ -140,6 +159,10 @@ esp_err_t config_mgr_init(void)
     if (!xclk_is_valid(s_xclk_mhz)) {
         ESP_LOGW(TAG, "xclk_mhz=%u not supported — using %u", s_xclk_mhz, DEFAULT_XCLK_MHZ);
         s_xclk_mhz = DEFAULT_XCLK_MHZ;
+    }
+    for (int i = 0; i < CONFIG_IMG_COUNT; i++) {
+        load_u8(nh, IMG_FIELDS[i].key, &s_img[i], IMG_FIELDS[i].def);
+        if (s_img[i] > IMG_FIELDS[i].max) s_img[i] = IMG_FIELDS[i].def;
     }
     s_mqtt_en = (mqtt_en_u8 != 0);
 
@@ -180,6 +203,9 @@ bool        config_mgr_is_mqtt_enabled(void)   { return s_mqtt_en; }
 uint8_t     config_mgr_get_cam_resolution(void){ return s_cam_res; }
 uint8_t     config_mgr_get_cam_quality(void)   { return s_cam_qual; }
 uint8_t     config_mgr_get_xclk_mhz(void)      { return s_xclk_mhz; }
+uint8_t     config_mgr_get_image(config_img_t f) { return (f < CONFIG_IMG_COUNT) ? s_img[f] : 0; }
+uint8_t     config_mgr_image_default(config_img_t f) { return (f < CONFIG_IMG_COUNT) ? IMG_FIELDS[f].def : 0; }
+uint8_t     config_mgr_image_max(config_img_t f)     { return (f < CONFIG_IMG_COUNT) ? IMG_FIELDS[f].max : 0; }
 const char *config_mgr_get_ota_token(void)     { return s_ota_token; }
 const char *config_mgr_get_coredump_token(void) { return s_cd_token; }
 
@@ -197,6 +223,14 @@ void config_mgr_set_cam_resolution(uint8_t v)
         return;
     }
     s_cam_res = v;
+}
+void config_mgr_set_image(config_img_t f, uint8_t v)
+{
+    if (f >= CONFIG_IMG_COUNT || v > IMG_FIELDS[f].max) {
+        ESP_LOGW(TAG, "set_image: field %d value %u out of range — ignoring", (int)f, v);
+        return;
+    }
+    s_img[f] = v;
 }
 void config_mgr_set_xclk_mhz(uint8_t v)
 {
@@ -243,6 +277,9 @@ static esp_err_t write_nvs(void)
     if (err == ESP_OK) err = nvs_set_u8(h,  KEY_CAM_RES,   s_cam_res);
     if (err == ESP_OK) err = nvs_set_u8(h,  KEY_CAM_QUAL,  s_cam_qual);
     if (err == ESP_OK) err = nvs_set_u8(h,  KEY_XCLK_MHZ,  s_xclk_mhz);
+    for (int i = 0; i < CONFIG_IMG_COUNT && err == ESP_OK; i++) {
+        err = nvs_set_u8(h, IMG_FIELDS[i].key, s_img[i]);
+    }
 
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "nvs_set failed err=0x%x — aborting save without commit", err);
@@ -283,6 +320,7 @@ typedef struct {
     uint8_t cam_res;
     uint8_t cam_qual;
     uint8_t xclk_mhz;
+    uint8_t img[CONFIG_IMG_COUNT];
 } staged_cfg_t;
 
 static RTC_NOINIT_ATTR uint32_t     s_staged_magic;
@@ -310,6 +348,7 @@ esp_err_t config_mgr_stage_for_reboot(void)
     s_staged_cfg.cam_res  = s_cam_res;
     s_staged_cfg.cam_qual = s_cam_qual;
     s_staged_cfg.xclk_mhz = s_xclk_mhz;
+    memcpy(s_staged_cfg.img, s_img, sizeof(s_img));
     s_staged_check = staged_crc();
     s_staged_magic = STAGED_CONFIG_MAGIC;
     ESP_LOGI(TAG, "Config staged in RTC RAM — will be saved to NVS on next boot");
@@ -352,6 +391,9 @@ esp_err_t config_mgr_apply_staged(void)
     s_cam_res  = cam_res_is_valid(s_staged_cfg.cam_res) ? s_staged_cfg.cam_res : DEFAULT_CAM_RES;
     s_cam_qual = (s_staged_cfg.cam_qual <= CAM_QUAL_MAX) ? s_staged_cfg.cam_qual : DEFAULT_CAM_QUAL;
     s_xclk_mhz = xclk_is_valid(s_staged_cfg.xclk_mhz) ? s_staged_cfg.xclk_mhz : DEFAULT_XCLK_MHZ;
+    for (int i = 0; i < CONFIG_IMG_COUNT; i++) {
+        s_img[i] = (s_staged_cfg.img[i] <= IMG_FIELDS[i].max) ? s_staged_cfg.img[i] : IMG_FIELDS[i].def;
+    }
 
     ESP_LOGI(TAG, "Applying staged config from previous boot");
     return write_nvs();

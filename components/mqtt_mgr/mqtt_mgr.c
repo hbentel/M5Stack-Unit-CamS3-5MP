@@ -566,20 +566,3 @@ esp_err_t mqtt_mgr_publish(const char *topic_suffix, const char *value)
     esp_mqtt_client_publish(client, topic, value, 0, 0, 0);
     return ESP_OK;
 }
-
-void mqtt_mgr_stop(void)
-{
-    if (client) {
-        ESP_LOGW(TAG, "Stopping MQTT client...");
-        esp_mqtt_client_stop(client);
-        esp_mqtt_client_destroy(client);
-        client = NULL;
-        s_connected = false;
-    }
-    if (s_telemetry_task) {
-        ESP_LOGW(TAG, "Deleting MQTT telemetry task...");
-        esp_task_wdt_delete(s_telemetry_task); // Unregister before delete — avoids WDT panic
-        vTaskDelete(s_telemetry_task);
-        s_telemetry_task = NULL;
-    }
-}

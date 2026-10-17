@@ -92,29 +92,26 @@ static camera_config_t camera_config = {
 // ========================================
 // Camera Image Quality Configuration
 // ========================================
-// The PY260 (mega_ccm.c) takes 0-based level indices, NOT the -2..+2 scale used
-// by OV-series sensors: the neutral/default level is mid-range, and 0 is the
-// minimum. (Passing 0 here used to select brightness -4 and contrast/saturation -3.)
-// Brightness: 0..8 → -4..+4 (4 = default)
-#define CAM_BRIGHTNESS      4
-// Contrast: 0..6 → -3..+3 (3 = default)
-#define CAM_CONTRAST        3
-// Saturation: 0..6 → -3..+3 (3 = default)
-#define CAM_SATURATION      3
-// Special Effect: 0 = Normal, 1 = Blueish, 2 = Reddish, 3 = B&W, 4 = Sepia, 5 = Negative, 6 = Greenish
-#define CAM_SPECIAL_EFFECT  0
-// White Balance Mode: 0 = Auto, 1 = Sunny, 2 = Office, 3 = Cloudy, 4 = Home
-#define CAM_WB_MODE         2
-// Exposure compensation (auto exposure stays on): 0 = default, 1 = +1, 2 = -1,
-// 3 = +2, 4 = -2, 5 = +3, 6 = -3
+// Brightness, contrast, saturation, white balance and effect come from /setup
+// (config_mgr_get_image(), PY260 driver levels — 0-based, neutral mid-range, NOT the
+// -2..+2 scale of OV sensors). Exposure compensation had no measurable effect and
+// stays at the default: 0 = default, 1 = +1, 2 = -1, 3 = +2, 4 = -2, 5 = +3, 6 = -3.
 #define CAM_EXPOSURE_COMP   0
+
+// The sensor's own power-on levels (what it falls back to when it resets itself)
+#define SENSOR_DEF_BRIGHTNESS 4
+#define SENSOR_DEF_CONTRAST   3
+#define SENSOR_DEF_SATURATION 3
+#define SENSOR_DEF_EFFECT     0
+#define SENSOR_DEF_WB_MODE    0   // Auto
 
 // JPEG compression level from /setup: 0 = High, 1 = Default, 2 = Low.
 // The PY260 has only these three levels — it ignores camera_config_t.jpeg_quality.
 static uint8_t s_cam_quality = 1;
 
 // Applies image settings. `keep` = levels to restore (the sensor's status before a
-// camera_reinit, so changes made from Home Assistant survive it); NULL = defaults.
+// camera_reinit, so changes made from Home Assistant survive it); NULL = the /setup
+// defaults (config_mgr).
 static void apply_camera_settings(const camera_status_t *keep)
 {
     sensor_t *s = esp_camera_sensor_get();
@@ -128,11 +125,11 @@ static void apply_camera_settings(const camera_status_t *keep)
     // Read-back verification only here (sensor freshly reset); runtime changes from
     // MQTT are written once, because SCCB reads while streaming destabilize the PY260.
     esp_camera_set_write_verify(true);
-    if (s->set_brightness) s->set_brightness(s, keep ? keep->brightness : CAM_BRIGHTNESS);
-    if (s->set_contrast) s->set_contrast(s, keep ? keep->contrast : CAM_CONTRAST);
-    if (s->set_saturation) s->set_saturation(s, keep ? keep->saturation : CAM_SATURATION);
-    if (s->set_special_effect) s->set_special_effect(s, keep ? keep->special_effect : CAM_SPECIAL_EFFECT);
-    if (s->set_wb_mode) s->set_wb_mode(s, keep ? keep->wb_mode : CAM_WB_MODE);
+    if (s->set_brightness) s->set_brightness(s, keep ? keep->brightness : config_mgr_get_image(CONFIG_IMG_BRIGHTNESS));
+    if (s->set_contrast) s->set_contrast(s, keep ? keep->contrast : config_mgr_get_image(CONFIG_IMG_CONTRAST));
+    if (s->set_saturation) s->set_saturation(s, keep ? keep->saturation : config_mgr_get_image(CONFIG_IMG_SATURATION));
+    if (s->set_special_effect) s->set_special_effect(s, keep ? keep->special_effect : config_mgr_get_image(CONFIG_IMG_EFFECT));
+    if (s->set_wb_mode) s->set_wb_mode(s, keep ? keep->wb_mode : config_mgr_get_image(CONFIG_IMG_WB_MODE));
     if (s->set_exposure_ctrl) s->set_exposure_ctrl(s, keep ? keep->ae_level : CAM_EXPOSURE_COMP);
     if (s->set_quality) s->set_quality(s, s_cam_quality);
     esp_camera_set_write_verify(false);
@@ -167,11 +164,15 @@ static bool s_pending_restore_valid = false;
 static TaskHandle_t s_reapply_task = NULL;
 static camera_status_t s_reapply_levels;
 
-static bool levels_are_defaults(const camera_status_t *l)
+// True if the levels equal what the sensor resets itself to — then its late reset
+// changes nothing and no re-apply is needed. (Compared against the SENSOR's power-on
+// levels, not the /setup defaults: e.g. WB Office would otherwise silently fall back
+// to Auto.)
+static bool levels_are_sensor_defaults(const camera_status_t *l)
 {
-    return l->brightness == CAM_BRIGHTNESS && l->contrast == CAM_CONTRAST &&
-           l->saturation == CAM_SATURATION && l->special_effect == CAM_SPECIAL_EFFECT &&
-           l->wb_mode == CAM_WB_MODE && l->ae_level == CAM_EXPOSURE_COMP;
+    return l->brightness == SENSOR_DEF_BRIGHTNESS && l->contrast == SENSOR_DEF_CONTRAST &&
+           l->saturation == SENSOR_DEF_SATURATION && l->special_effect == SENSOR_DEF_EFFECT &&
+           l->wb_mode == SENSOR_DEF_WB_MODE && l->ae_level == CAM_EXPOSURE_COMP;
 }
 
 static void reapply_task(void *arg)
@@ -199,7 +200,7 @@ static void reapply_task(void *arg)
 
 static void schedule_reapply(const camera_status_t *levels)
 {
-    if (!levels || levels_are_defaults(levels)) return;
+    if (!levels || levels_are_sensor_defaults(levels)) return;
     if (!s_reapply_task) {
         xTaskCreatePinnedToCore(reapply_task, "cam_reapply", 3072, NULL, 3, &s_reapply_task, 1);
     }
@@ -392,7 +393,7 @@ void app_main(void)
     }
 
     // Check for pending OTA *before* the camera is initialized.
-    // If a URL was saved to NVS by the previous boot (via MQTT trigger),
+    // If a URL was saved to RTC RAM by the previous boot (via MQTT trigger),
     // download + flash it now and reboot into the new firmware.
     // Camera DMA is never started, so flash operations cannot race with it.
     ESP_LOGI(TAG, "--- Checking for pending OTA ---");
@@ -466,6 +467,10 @@ void app_main(void)
         ESP_LOGE(TAG, "Camera Init Failed! Error: 0x%x — continuing without camera, will retry", err);
     } else {
         apply_camera_settings(NULL);
+        // The sensor's late start-up reset can clobber these too (WB Office once read
+        // back Auto after boot) — re-apply once after it has settled.
+        sensor_t *s0 = esp_camera_sensor_get();
+        if (s0) schedule_reapply(&s0->status);
     }
 
     // Prime DMA pipeline — Wi-Fi is fully connected, OPI bus is stable

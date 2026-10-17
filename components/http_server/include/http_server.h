@@ -21,15 +21,6 @@ httpd_handle_t http_server_get_handle(void);
 // Returns handle to Port 81 server
 httpd_handle_t stream_server_get_handle(void);
 
-// Stops both servers
-void http_server_stop(void);
-
-// Signals both servers to stop streaming/handling (for OTA)
-void http_server_signal_stop(void);
-
-// Prepares the HTTP environment for OTA (drains queues, de-inits camera)
-void http_server_prepare_ota(void);
-
 // Returns the number of active MJPEG stream clients
 uint8_t http_server_get_active_streams(void);
 

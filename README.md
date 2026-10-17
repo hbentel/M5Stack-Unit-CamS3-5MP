@@ -218,8 +218,13 @@ http://<device-ip>/setup
 | Camera Resolution | QVGA / VGA / HD / UXGA | VGA (640×480) |
 | JPEG Quality | High / Default / Low (the PY260's three compression levels) | Default |
 | Camera Clock | 10 / 16 / 20 MHz XCLK (~9 / 15 / 19 fps at VGA). Higher = more frames, less exposure per frame | 10 MHz |
+| Brightness / Contrast / Saturation | Boot defaults, shown as −4…+4 / −3…+3 around neutral | neutral |
+| White Balance | Auto / Sunny / Office / Cloudy / Home | Office |
+| Effect | Normal / Blueish / Reddish / Black & white / Sepia / Negative / Greenish | Normal |
 
-Submit the form — the device reboots and saves the values to NVS early in the next boot, before Wi-Fi starts. Settings persist
+Submit the form — the device reboots and saves the values to NVS early in the next boot, before Wi-Fi starts.
+Image settings changed from Home Assistant (MQTT) apply immediately but last only until the next reboot; the
+`/setup` image values are the boot defaults. Settings persist
 across power cycles and OTA updates.
 
 > **Compile-time defaults** for MQTT URL, username, password, and device ID can be

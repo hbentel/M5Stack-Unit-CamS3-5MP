@@ -33,11 +33,6 @@ esp_err_t mqtt_mgr_publish(const char *topic_suffix, const char *value);
 void mqtt_mgr_publish_camera_state(void);
 
 /**
- * @brief Stop the MQTT Manager (disconnects and stops tasks).
- */
-void mqtt_mgr_stop(void);
-
-/**
  * @brief Register a callback for OTA URL commands received via MQTT.
  *        Called by ota_mgr_init() to avoid a circular link dependency.
  *        sha256_hex may be NULL if no hash was provided in the payload.

@@ -9,6 +9,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Image settings on `/setup`** — brightness, contrast, saturation, white balance
+  and effect are now persisted boot defaults (NVS). Changes from Home Assistant still
+  apply immediately and last until the next reboot.
 - **Selectable camera clock (XCLK) 10 / 16 / 20 MHz** on `/setup` (default 10;
   `xclk_mhz` in `/stats`). Measured at VGA: 9.4 / 15.0 / 18.8 fps sensor rate, zero
   frame errors (20 MHz soaked 5 min). The former "10 MHz physical ceiling" was a driver
@@ -26,6 +29,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Clean-up** — removed dead code from the old OTA path (`http_server_stop`,
+  `http_server_signal_stop`, `http_server_prepare_ota`, `mqtt_mgr_stop`) and the unused
+  NVS camera save/load API; corrected the FPS-test-mode help text and stale comments.
 - **Full frame rate to Frigate** — the 5,760 B default TCP send buffer capped a
   ~140 KB-per-frame stream at ~0.8 MB/s over Wi-Fi (~7.4 ms RTT), so clients got
   5.8 of the sensor's 9.4 fps. The buffer is now 14,400 B (10 × MSS), which
@@ -38,6 +44,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **White balance could silently fall back to Auto** — the post-reinit re-apply was
+  skipped when levels matched the *firmware* defaults, but the sensor resets to its
+  *own* defaults (WB Auto), so WB Office was never restored. It now compares against
+  the sensor's defaults, and the re-apply also runs 10 s after boot.
 - **OTA rollback and crash-loop detection were inert since v0.2.7** — the image was
   confirmed and the NVS boot counter reset on every boot before Wi-Fi started, so
   a bad OTA image never rolled back and the boot-loop threshold was unreachable;

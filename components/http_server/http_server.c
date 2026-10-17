@@ -29,7 +29,6 @@ static const char *TAG = "http_server";
 
 static httpd_handle_t s_server = NULL;
 static httpd_handle_t s_stream_server = NULL;
-static volatile bool s_ota_pending = false;
 
 #define MJPEG_BOUNDARY "frame"
 #define STREAM_PART_HDR "--" MJPEG_BOUNDARY "\r\nContent-Type: image/jpeg\r\nContent-Length: %zu\r\n\r\n"
@@ -104,7 +103,7 @@ static esp_err_t capture_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "Snapshot requested");
 
-    if (s_ota_pending || s_camera_paused) {
+    if (s_camera_paused) {
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
@@ -377,7 +376,6 @@ static void mjpeg_broadcaster_task(void *arg)
 
     while (1) {
         esp_task_wdt_reset();
-        if (s_ota_pending) goto broadcaster_exit;
         if (s_camera_paused) {
             s_broadcaster_idle = true;   // not inside esp_camera_fb_get()
             vTaskDelay(pdMS_TO_TICKS(50));
@@ -404,10 +402,6 @@ static void mjpeg_broadcaster_task(void *arg)
         }
 
         camera_fb_t *fb = esp_camera_fb_get();
-        if (s_ota_pending) {
-            if (fb) esp_camera_fb_return(fb);
-            goto broadcaster_exit;
-        }
 
         if (!fb) {
             fail_count++;
@@ -510,18 +504,6 @@ static void mjpeg_broadcaster_task(void *arg)
             s_last_broadcast_us = esp_timer_get_time();
         }
     }
-
-broadcaster_exit:
-    ESP_LOGW(TAG, "Broadcaster: shutting down");
-    esp_task_wdt_delete(NULL);
-    xSemaphoreTake(s_broadcast_mutex, portMAX_DELAY);
-    if (s_broadcast_fb) {
-        frame_pool_unref(s_broadcast_fb);
-        s_broadcast_fb = NULL;
-    }
-    xSemaphoreGive(s_broadcast_mutex);
-    s_broadcaster_task_handle = NULL;
-    vTaskDelete(NULL);
 }
 
 static void mjpeg_client_worker_task(void *arg)
@@ -546,7 +528,7 @@ static void mjpeg_client_worker_task(void *arg)
     uint32_t last_sent_id = 0;
     esp_err_t res = ESP_OK;
 
-    while (res == ESP_OK && !s_ota_pending) {
+    while (res == ESP_OK) {
         // Wait for broadcaster signal (up to 1s)
         if (xSemaphoreTake(client->sync_sem, pdMS_TO_TICKS(1000)) != pdTRUE) {
             continue; // No new frame within timeout
@@ -959,8 +941,32 @@ static void page_appendf(page_t *p, const char *fmt, ...)
     }
 }
 
-/* Template is ~3.3 KB; escaped config values add at most ~1.1 KB */
-#define SETUP_PAGE_MAX 6144
+/* Template is ~5 KB; escaped config values add at most ~1.1 KB */
+#define SETUP_PAGE_MAX 8192
+
+/* <select> for a driver level 0..max shown as an offset from neutral (e.g. -4..+4) */
+static void page_level_select(page_t *p, const char *label, const char *name,
+                              uint8_t cur, uint8_t max, uint8_t neutral)
+{
+    page_appendf(p, "<label>%s</label><select name='%s'>", label, name);
+    for (int v = 0; v <= max; v++) {
+        int off = v - neutral;
+        page_appendf(p, "<option value='%d'%s>%s%d%s</option>", v, cur == v ? " selected" : "",
+                     off > 0 ? "+" : "", off, off == 0 ? " (neutral)" : "");
+    }
+    page_appendf(p, "</select>");
+}
+
+/* <select> for a named list (value = index) */
+static void page_named_select(page_t *p, const char *label, const char *name,
+                              uint8_t cur, const char *const *names, int count)
+{
+    page_appendf(p, "<label>%s</label><select name='%s'>", label, name);
+    for (int v = 0; v < count; v++) {
+        page_appendf(p, "<option value='%d'%s>%s</option>", v, cur == v ? " selected" : "", names[v]);
+    }
+    page_appendf(p, "</select>");
+}
 
 /* GET /setup — HTML config form pre-filled with current values */
 static esp_err_t setup_get_handler(httpd_req_t *req)
@@ -1084,6 +1090,21 @@ static esp_err_t setup_get_handler(httpd_req_t *req)
         "</select>"
         "<p style='font-size:0.85em;color:#6b7280;margin:4px 0 0'>Higher clocks give more frames but "
         "less exposure per frame (darker at night). Frigate detection needs ~5 fps.</p>"
+        "<h3 style='margin:24px 0 0'>Image (applied at boot)</h3>"
+        "<p style='font-size:0.85em;color:#6b7280;margin:4px 0 0'>Changes from Home Assistant apply "
+        "immediately but last only until the next reboot; these are the boot defaults.</p>");
+    static const char *wb_names[] = {"Auto", "Sunny", "Office", "Cloudy", "Home"};
+    static const char *fx_names[] = {"Normal", "Blueish", "Reddish", "Black & white", "Sepia", "Negative", "Greenish"};
+    page_level_select(&page, "Brightness", "img_b", config_mgr_get_image(CONFIG_IMG_BRIGHTNESS),
+                      config_mgr_image_max(CONFIG_IMG_BRIGHTNESS), 4);
+    page_level_select(&page, "Contrast", "img_c", config_mgr_get_image(CONFIG_IMG_CONTRAST),
+                      config_mgr_image_max(CONFIG_IMG_CONTRAST), 3);
+    page_level_select(&page, "Saturation", "img_s", config_mgr_get_image(CONFIG_IMG_SATURATION),
+                      config_mgr_image_max(CONFIG_IMG_SATURATION), 3);
+    page_named_select(&page, "White Balance", "img_wb", config_mgr_get_image(CONFIG_IMG_WB_MODE), wb_names, 5);
+    page_named_select(&page, "Effect", "img_fx", config_mgr_get_image(CONFIG_IMG_EFFECT), fx_names, 7);
+
+    page_appendf(&page,
         "<br><input type='submit' value='Save &amp; Restart'>"
         "<script>function tog(){var e=document.getElementById('mqtt_en').checked;"
         "var d=document.getElementById('mqtt_fields');"
@@ -1190,6 +1211,12 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
     char cam_res_s[8]   = {0};
     char cam_qual_s[8]  = {0};
     char xclk_s[8]      = {0};
+    static const struct { const char *key; config_img_t field; } img_keys[] = {
+        {"img_b", CONFIG_IMG_BRIGHTNESS}, {"img_c", CONFIG_IMG_CONTRAST}, {"img_s", CONFIG_IMG_SATURATION},
+        {"img_wb", CONFIG_IMG_WB_MODE}, {"img_fx", CONFIG_IMG_EFFECT},
+    };
+    int img_vals[CONFIG_IMG_COUNT];
+    for (int i = 0; i < CONFIG_IMG_COUNT; i++) img_vals[i] = -1;
 
     char *saveptr = NULL;
     char *pair = strtok_r(body, "&", &saveptr);
@@ -1212,6 +1239,11 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
             else if (strcmp(key, "cam_res")   == 0) strlcpy(cam_res_s,   decoded, sizeof(cam_res_s));
             else if (strcmp(key, "cam_qual")  == 0) strlcpy(cam_qual_s,  decoded, sizeof(cam_qual_s));
             else if (strcmp(key, "xclk")      == 0) strlcpy(xclk_s,      decoded, sizeof(xclk_s));
+            else {
+                for (int i = 0; i < CONFIG_IMG_COUNT; i++) {
+                    if (strcmp(key, img_keys[i].key) == 0 && decoded[0]) img_vals[img_keys[i].field] = atoi(decoded);
+                }
+            }
         }
         pair = strtok_r(NULL, "&", &saveptr);
     }
@@ -1225,6 +1257,12 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
     if (cam_qual_s[0] == '\0' || cam_qual < 0 || cam_qual > 2) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "cam_qual must be 0-2");
         return ESP_FAIL;
+    }
+    for (int i = 0; i < CONFIG_IMG_COUNT; i++) {
+        if (img_vals[i] < 0 || img_vals[i] > config_mgr_image_max((config_img_t)i)) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "image settings missing or out of range");
+            return ESP_FAIL;
+        }
     }
     int xclk = atoi(xclk_s);
     if (xclk != 10 && xclk != 16 && xclk != 20) {
@@ -1248,6 +1286,7 @@ static esp_err_t setup_post_handler(httpd_req_t *req)
     config_mgr_set_cam_resolution((uint8_t)cam_res);
     config_mgr_set_cam_quality((uint8_t)cam_qual);
     config_mgr_set_xclk_mhz((uint8_t)xclk);
+    for (int i = 0; i < CONFIG_IMG_COUNT; i++) config_mgr_set_image((config_img_t)i, (uint8_t)img_vals[i]);
 
     ESP_LOGI(TAG, "Setup POST: url=%s user=%s dev=%s mqtt_en=%d res=%d qual=%d xclk=%d",
              mqtt_url, mqtt_user, device_id, mqtt_en, cam_res, cam_qual, xclk);
@@ -1436,77 +1475,4 @@ esp_err_t start_http_server(void)
 httpd_handle_t http_server_get_handle(void)
 {
     return s_server;
-}
-
-void http_server_stop(void)
-{
-    s_ota_pending = true;
-    vTaskDelay(pdMS_TO_TICKS(500)); // Give tasks time to notice
-
-    if (s_server) {
-        ESP_LOGW(TAG, "Stopping main HTTP server (Port 80)...");
-        httpd_stop(s_server);
-        s_server = NULL;
-    }
-    if (s_stream_server) {
-        ESP_LOGW(TAG, "Stopping stream HTTP server (Port 81)...");
-        httpd_stop(s_stream_server);
-        s_stream_server = NULL;
-    }
-
-    // Mutexes and broadcaster handle stay for next start, or can be cleaned if permanent stop
-}
-
-void http_server_signal_stop(void)
-{
-    ESP_LOGW(TAG, "Signaling HTTP streams to stop...");
-    s_ota_pending = true;
-}
-
-void http_server_prepare_ota(void)
-{
-    ESP_LOGW(TAG, "OTA requested: signaling streams to stop...");
-    s_ota_pending = true;
-
-    // Wait for broadcaster task to exit
-    int timeout = 50; // 5 seconds (50 * 100ms)
-    while (s_broadcaster_task_handle != NULL && timeout-- > 0) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-    if (s_broadcaster_task_handle != NULL) {
-        ESP_LOGE(TAG, "Broadcaster task failed to exit, deleting manually");
-        vTaskDelete(s_broadcaster_task_handle);
-        s_broadcaster_task_handle = NULL;
-    }
-
-    // Wait for client tasks to exit
-    timeout = 20; // 2 seconds
-    bool all_gone;
-    do {
-        all_gone = true;
-        xSemaphoreTake(s_clients_mutex, portMAX_DELAY);
-        for (int i = 0; i < MAX_STREAM_CLIENTS; i++) {
-            if (s_stream_clients[i].active) {
-                all_gone = false;
-                break;
-            }
-        }
-        xSemaphoreGive(s_clients_mutex);
-        if (!all_gone) vTaskDelay(pdMS_TO_TICKS(100));
-    } while (!all_gone && timeout-- > 0);
-
-    // Drain all pending camera frames before deinit.
-    ESP_LOGW(TAG, "Draining camera frame buffers...");
-    for (int i = 0; i < 10; i++) {
-        camera_fb_t *fb = esp_camera_fb_get();
-        if (!fb) break;
-        esp_camera_fb_return(fb);
-    }
-    // One more delay to let cam_task settle back to queue-wait state
-    vTaskDelay(pdMS_TO_TICKS(200));
-
-    ESP_LOGW(TAG, "Deinitializing camera for OTA...");
-    esp_camera_deinit();
-    vTaskDelay(pdMS_TO_TICKS(500));
-    ESP_LOGI(TAG, "Camera stopped. Flash is safe for OTA writes.");
 }

@@ -13,8 +13,6 @@
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "esp_system.h"
-#include "nvs_flash.h"
-#include "nvs.h"
 #include "sensor.h"
 #include "sccb.h"
 #include "cam_hal.h"
@@ -29,8 +27,6 @@ typedef struct {
     camera_fb_t fb;
 } camera_state_t;
 
-static const char *CAMERA_SENSOR_NVS_KEY = "sensor";
-static const char *CAMERA_PIXFORMAT_NVS_KEY = "pixformat";
 static camera_state_t *s_state = NULL;
 
 /* ESP32-S3 LCD_CAM generates XCLK, no LEDC needed */
@@ -243,75 +239,6 @@ sensor_t *esp_camera_sensor_get()
         return NULL;
     }
     return &s_state->sensor;
-}
-
-esp_err_t esp_camera_save_to_nvs(const char *key)
-{
-#if ESP_IDF_VERSION_MAJOR > 3
-    nvs_handle_t handle;
-#else
-    nvs_handle handle;
-#endif
-    esp_err_t ret = nvs_open(key, NVS_READWRITE, &handle);
-
-    if (ret == ESP_OK) {
-        sensor_t *s = esp_camera_sensor_get();
-        if (s != NULL) {
-            ret = nvs_set_blob(handle, CAMERA_SENSOR_NVS_KEY, &s->status, sizeof(camera_status_t));
-            if (ret == ESP_OK) {
-                uint8_t pf = s->pixformat;
-                ret = nvs_set_u8(handle, CAMERA_PIXFORMAT_NVS_KEY, pf);
-            }
-            nvs_close(handle);
-            return ret;
-        } else {
-            nvs_close(handle);
-            return ESP_ERR_CAMERA_NOT_DETECTED;
-        }
-    } else {
-        return ret;
-    }
-}
-
-esp_err_t esp_camera_load_from_nvs(const char *key)
-{
-#if ESP_IDF_VERSION_MAJOR > 3
-    nvs_handle_t handle;
-#else
-    nvs_handle handle;
-#endif
-
-    esp_err_t ret = nvs_open(key, NVS_READONLY, &handle);
-
-    if (ret == ESP_OK) {
-        sensor_t *s = esp_camera_sensor_get();
-        camera_status_t st;
-        if (s != NULL) {
-            size_t size = sizeof(camera_status_t);
-            ret = nvs_get_blob(handle, CAMERA_SENSOR_NVS_KEY, &st, &size);
-            if (ret == ESP_OK) {
-                s->set_brightness(s, st.brightness);
-                s->set_contrast(s, st.contrast);
-                s->set_saturation(s, st.saturation);
-                s->set_special_effect(s, st.special_effect);
-                s->set_wb_mode(s, st.wb_mode);
-                s->set_hmirror(s, st.hmirror);
-                s->set_vflip(s, st.vflip);
-                s->set_framesize(s, st.framesize);
-                s->set_quality(s, st.quality);
-            }
-            /* Always force JPEG regardless of NVS */
-            s->set_pixformat(s, PIXFORMAT_JPEG);
-        } else {
-            nvs_close(handle);
-            return ESP_ERR_CAMERA_NOT_DETECTED;
-        }
-        nvs_close(handle);
-        return ret;
-    } else {
-        ESP_LOGW(TAG, "Error (%d) opening nvs key \"%s\"", ret, key);
-        return ret;
-    }
 }
 
 void esp_camera_set_write_verify(bool enable)

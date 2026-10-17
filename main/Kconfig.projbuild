@@ -32,11 +32,12 @@ config UNITCAMS3_COREDUMP_TOKEN
         An empty token disables authentication.
 
 config UNITCAMS3_FPS_TEST_MODE
-    bool "FPS test mode (disables Wi-Fi, HTTP, MQTT — camera throughput measurement only)"
+    bool "FPS test mode (no HTTP servers — camera throughput measurement only)"
     default n
     help
-        When enabled the firmware skips all network services and runs the camera
-        in a tight loop reporting FPS to the serial console. NEVER enable this
-        in production — the device will not stream or respond to MQTT.
+        When enabled the firmware stops after camera init (Wi-Fi and MQTT still
+        start) and runs the camera in a tight loop reporting FPS to the serial
+        console; the HTTP and stream servers are never started. NEVER enable this
+        in production — the device will not stream.
 
 endmenu

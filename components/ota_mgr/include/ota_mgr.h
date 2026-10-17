@@ -31,7 +31,7 @@ esp_err_t ota_mgr_init(void);
 esp_err_t ota_mgr_start_url(const char *url, const char *sha256_hex);
 
 /**
- * @brief Check NVS for a pending OTA URL and run it if found.
+ * @brief Check RTC RAM for a pending OTA URL and run it if found.
  *
  * Must be called from main() AFTER Wi-Fi connects but BEFORE
  * esp_camera_init(). If a pending URL is found, downloads and

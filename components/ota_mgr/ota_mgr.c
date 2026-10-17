@@ -31,10 +31,10 @@ static const char *TAG = "ota_mgr";
 // cache-disable window causes an ExcCause=7 (cache-disabled cached-memory
 // access) → double exception → device crash.
 //
-// RTC_DATA_ATTR places data in RTC Fast RAM — a plain SRAM write, no flash,
-// no cache disable, safe while camera DMA is running.
-// RTC RAM is retained across software resets (esp_restart) so the URL
-// survives the reboot triggered by ota_mgr_start_url().
+// RTC_NOINIT_ATTR (see below) places data in RTC RAM — a plain SRAM write, no
+// flash, no cache disable, safe while camera DMA is running. It is retained across
+// software resets (esp_restart), so the URL survives the reboot triggered by
+// ota_mgr_start_url().
 //
 // Two magic values are stored for corruption detection. A URL length field
 // provides a third check. The probability of all three matching by accident
@@ -142,7 +142,7 @@ static esp_err_t sha256_buffer(const uint8_t *buf, size_t len, uint8_t digest[32
 }
 
 // Maximum firmware binary we will accept (must fit in free PSRAM at OTA time).
-// frame_pool (3×512KB = 1.5MB) is already allocated before OTA runs, leaving ~6MB free.
+// frame_pool (5×512KB = 2.5MB) is already allocated before OTA runs, leaving ~5MB free.
 #define OTA_MAX_FW_SIZE (4 * 1024 * 1024)  // 4 MB ceiling
 
 static esp_err_t run_ota_from_url(const char *url, const char *sha256_hex)

@@ -14,6 +14,16 @@ extern "C" {
  */
 esp_err_t config_mgr_init(void);
 
+/* Image settings applied at boot (PY260 driver levels, see config_mgr.c) */
+typedef enum {
+    CONFIG_IMG_BRIGHTNESS,   /* 0..8, 4 = neutral */
+    CONFIG_IMG_CONTRAST,     /* 0..6, 3 = neutral */
+    CONFIG_IMG_SATURATION,   /* 0..6, 3 = neutral */
+    CONFIG_IMG_WB_MODE,      /* 0 Auto, 1 Sunny, 2 Office, 3 Cloudy, 4 Home */
+    CONFIG_IMG_EFFECT,       /* 0 Normal ... 3 B&W ... 6 Greenish */
+    CONFIG_IMG_COUNT
+} config_img_t;
+
 /* Getters */
 const char *config_mgr_get_mqtt_url(void);
 const char *config_mgr_get_mqtt_user(void);
@@ -23,6 +33,9 @@ bool        config_mgr_is_mqtt_enabled(void);
 uint8_t     config_mgr_get_cam_resolution(void);   /* framesize_t value */
 uint8_t     config_mgr_get_cam_quality(void);      /* 0 = High, 1 = Default, 2 = Low */
 uint8_t     config_mgr_get_xclk_mhz(void);         /* camera XCLK: 10 (default), 16 or 20 */
+uint8_t     config_mgr_get_image(config_img_t field);
+uint8_t     config_mgr_image_default(config_img_t field);
+uint8_t     config_mgr_image_max(config_img_t field);
 const char *config_mgr_get_ota_token(void);
 const char *config_mgr_get_coredump_token(void);
 
@@ -35,6 +48,7 @@ void config_mgr_set_mqtt_enabled(bool v);
 void config_mgr_set_cam_resolution(uint8_t v);
 void config_mgr_set_cam_quality(uint8_t v);
 void config_mgr_set_xclk_mhz(uint8_t v);
+void config_mgr_set_image(config_img_t field, uint8_t v);
 void config_mgr_set_ota_token(const char *v);
 void config_mgr_set_coredump_token(const char *v);
 
