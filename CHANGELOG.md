@@ -9,6 +9,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Effect control in Home Assistant** — `unitcams3/effect/set` (0–6, 3 = B&W),
+  e.g. for night scenes with a strong colour cast.
 - **`/api/reg` sensor register debug endpoint** — read one register, dump up to
   256, or write one and read it back, for black-box exploration of the PY260
   register map without a datasheet. Protected by the Coredump Token when set.
@@ -27,6 +29,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Runtime setting changes** — changes from Home Assistant are now written once,
+  without read-back verification (SCCB traffic while streaming can make the
+  sensor revert; any write may, not only reads). A camera reinit re-applies the
+  levels in effect rather than the firmware defaults. Known issue: after a
+  reinit the restored brightness was observed back at default seconds later
+  (the sensor appears to overwrite some registers late in its own start-up).
 - **Sensor reverting to 320×240 while streaming** — the PY260 falls back to its
   default resolution 10–20 s after SCCB register reads issued while it streams,
   and keeps streaming, so nothing in the pipeline noticed. (Confirmed on device:

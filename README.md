@@ -341,7 +341,6 @@ All topics use the **Device ID** as a prefix (default: `unitcams3`).
 | `unitcams3/saturation/set` | `0` to `6` | Set sensor saturation (3 = default) |
 | `unitcams3/wb_mode/set` | `0`–`4` | White balance (0=Auto, 1=Sunny, 2=Office, 3=Cloudy, 4=Home) |
 | `unitcams3/effect/set` | `0`–`6` | Effect (0=Normal, 1=Blueish, 2=Reddish, 3=B&W, 4=Sepia, 5=Negative, 6=Greenish) |
-| `unitcams3/effect/set` | `0`–`6` | Effect (0=Normal, 1=Blueish, 2=Reddish, 3=B&W, 4=Sepia, 5=Negative, 6=Greenish) |
 | `unitcams3/fps_cap/set` | `0`–`15` | Broadcaster FPS cap (0 = unlimited); not persisted |
 | `unitcams3/led/set` | `1` / `0` | LED on / off |
 | `unitcams3/restart` | _(any)_ | Trigger `esp_restart()` |
