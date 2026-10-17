@@ -146,7 +146,7 @@ int SCCB_Write(uint8_t slv_addr, uint8_t reg, uint8_t data)
 }
 
 /* Read 8-bit value from 16-bit register address */
-uint8_t SCCB_Read16(uint8_t slv_addr, uint16_t reg)
+int SCCB_Read16(uint8_t slv_addr, uint16_t reg)
 {
     uint8_t data = 0;
     uint16_t reg_htons = LITTLETOBIG(reg);
@@ -157,7 +157,7 @@ uint8_t SCCB_Read16(uint8_t slv_addr, uint16_t reg)
                         tx, sizeof(tx), &data, 1, SCCB_TIMEOUT_MS);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "SCCB_Read16 [%04x] fail", reg);
-        return 0xFF;
+        return -1;
     }
     return data;
 }

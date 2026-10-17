@@ -15,7 +15,8 @@ int SCCB_Deinit(void);
 uint8_t SCCB_Probe(void);
 uint8_t SCCB_Read(uint8_t slv_addr, uint8_t reg);
 int SCCB_Write(uint8_t slv_addr, uint8_t reg, uint8_t data);
-uint8_t SCCB_Read16(uint8_t slv_addr, uint16_t reg);
+/* Returns the 8-bit value, or -1 on bus error (so errors can't masquerade as 0xFF) */
+int SCCB_Read16(uint8_t slv_addr, uint16_t reg);
 int SCCB_Write16(uint8_t slv_addr, uint16_t reg, uint8_t data);
 uint16_t SCCB_Read_Addr16_Val16(uint8_t slv_addr, uint16_t reg);
 int SCCB_Write_Addr16_Val16(uint8_t slv_addr, uint16_t reg, uint16_t data);

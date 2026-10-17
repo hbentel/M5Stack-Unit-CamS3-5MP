@@ -618,30 +618,37 @@ static esp_err_t logs_handler(httpd_req_t *req)
     return err;
 }
 
+// Bearer-token check for the debug endpoints (/api/coredump, /api/reg), using the
+// Coredump Token from /setup. Empty token = open. Sends 401 and returns false if
+// the request is not authorized.
+static bool debug_authorized(httpd_req_t *req, const char *realm)
+{
+    const char *expected = config_mgr_get_coredump_token();
+    if (!expected || expected[0] == '\0') return true;
+
+    char auth_hdr[96] = {0};
+    bool authorized = false;
+    if (httpd_req_get_hdr_value_str(req, "Authorization", auth_hdr, sizeof(auth_hdr)) == ESP_OK) {
+        // auth_hdr should be "Bearer <token>"
+        const char *prefix = "Bearer ";
+        if (strncmp(auth_hdr, prefix, strlen(prefix)) == 0) {
+            authorized = (strcmp(auth_hdr + strlen(prefix), expected) == 0);
+        }
+    }
+    if (!authorized) {
+        char challenge[48];
+        snprintf(challenge, sizeof(challenge), "Bearer realm=\"%s\"", realm);
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_hdr(req, "WWW-Authenticate", challenge);
+        httpd_resp_sendstr(req, "Unauthorized");
+    }
+    return authorized;
+}
+
 // Handler for "/api/coredump" — stream raw coredump partition
 static esp_err_t coredump_handler(httpd_req_t *req)
 {
-    // Bearer token auth — if a token is configured, enforce it.
-    const char *expected = config_mgr_get_coredump_token();
-    if (expected && expected[0] != '\0') {
-        char auth_hdr[96] = {0};
-        esp_err_t hdr_err = httpd_req_get_hdr_value_str(req, "Authorization",
-                                                          auth_hdr, sizeof(auth_hdr));
-        bool authorized = false;
-        if (hdr_err == ESP_OK) {
-            // auth_hdr should be "Bearer <token>"
-            const char *prefix = "Bearer ";
-            if (strncmp(auth_hdr, prefix, strlen(prefix)) == 0) {
-                authorized = (strcmp(auth_hdr + strlen(prefix), expected) == 0);
-            }
-        }
-        if (!authorized) {
-            httpd_resp_set_status(req, "401 Unauthorized");
-            httpd_resp_set_hdr(req, "WWW-Authenticate", "Bearer realm=\"coredump\"");
-            httpd_resp_sendstr(req, "Unauthorized");
-            return ESP_FAIL;
-        }
-    }
+    if (!debug_authorized(req, "coredump")) return ESP_FAIL;
 
     const esp_partition_t *part = esp_partition_find_first(
         ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, NULL);
@@ -684,6 +691,118 @@ static esp_err_t coredump_handler(httpd_req_t *req)
     free(buf);
     httpd_resp_send_chunk(req, NULL, 0); // End chunked response
     return ESP_OK;
+}
+
+// ========================================
+// /api/reg — PY260 sensor register access (debug)
+// ========================================
+// Black-box exploration of the sensor's register map without a datasheet.
+//   GET  /api/reg?addr=0x0125             → {"addr":"0x0125","value":1}
+//   GET  /api/reg?start=0x0100&count=64   → {"start":"0x0100","values":[...]}
+//   POST /api/reg  body addr=0x0125&value=2 → write, then read back
+// A value of -1 means the SCCB read failed. Writing 0x01 to 0x0102 (soft reset)
+// restores sensor defaults; a camera reinit re-applies the firmware's settings.
+
+#define REG_DUMP_MAX 256
+
+static bool parse_num(const char *s, long min, long max, long *out)
+{
+    if (!s || !*s) return false;
+    char *end = NULL;
+    long v = strtol(s, &end, 0);   // accepts decimal or 0x-prefixed hex
+    if (*end != '\0' || v < min || v > max) return false;
+    *out = v;
+    return true;
+}
+
+static esp_err_t reg_send_json(httpd_req_t *req, const char *json, int len)
+{
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, json, len);
+}
+
+static esp_err_t reg_get_handler(httpd_req_t *req)
+{
+    if (!debug_authorized(req, "debug")) return ESP_FAIL;
+    sensor_t *s = esp_camera_sensor_get();
+    if (!s || !s->get_reg) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Camera not initialized");
+        return ESP_FAIL;
+    }
+
+    char query[96] = {0}, a[16] = {0}, st[16] = {0}, cn[16] = {0};
+    httpd_req_get_url_query_str(req, query, sizeof(query));
+    httpd_query_key_value(query, "addr",  a,  sizeof(a));
+    httpd_query_key_value(query, "start", st, sizeof(st));
+    httpd_query_key_value(query, "count", cn, sizeof(cn));
+
+    long addr, start, count = 16;
+    if (parse_num(a, 0, 0xFFFF, &addr)) {
+        char json[64];
+        int len = snprintf(json, sizeof(json), "{\"addr\":\"0x%04lx\",\"value\":%d}",
+                           addr, s->get_reg(s, (int)addr, 0xFF));
+        return reg_send_json(req, json, len);
+    }
+    if (parse_num(st, 0, 0xFFFF, &start) && (cn[0] == '\0' || parse_num(cn, 1, REG_DUMP_MAX, &count))) {
+        if (start + count > 0x10000) count = 0x10000 - start;
+        char *json = malloc(48 + count * 5);
+        if (!json) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+            return ESP_FAIL;
+        }
+        int len = sprintf(json, "{\"start\":\"0x%04lx\",\"values\":[", start);
+        for (long i = 0; i < count; i++) {
+            len += sprintf(json + len, "%s%d", i ? "," : "", s->get_reg(s, (int)(start + i), 0xFF));
+        }
+        len += sprintf(json + len, "]}");
+        esp_err_t ret = reg_send_json(req, json, len);
+        free(json);
+        return ret;
+    }
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                        "use ?addr=0xNNNN or ?start=0xNNNN&count=1-256");
+    return ESP_FAIL;
+}
+
+static esp_err_t reg_post_handler(httpd_req_t *req)
+{
+    if (!debug_authorized(req, "debug")) return ESP_FAIL;
+    sensor_t *s = esp_camera_sensor_get();
+    if (!s || !s->set_reg || !s->get_reg) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Camera not initialized");
+        return ESP_FAIL;
+    }
+
+    char body[64] = {0};
+    int total = req->content_len < (int)sizeof(body) - 1 ? req->content_len : (int)sizeof(body) - 1;
+    int received = 0;
+    while (received < total) {
+        int r = httpd_req_recv(req, body + received, total - received);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (r <= 0) break;
+        received += r;
+    }
+    body[received] = '\0';
+
+    char a[16] = {0}, v[16] = {0};
+    long addr, value;
+    httpd_query_key_value(body, "addr",  a, sizeof(a));
+    httpd_query_key_value(body, "value", v, sizeof(v));
+    if (!parse_num(a, 0, 0xFFFF, &addr) || !parse_num(v, 0, 0xFF, &value)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "body must be addr=0xNNNN&value=0-255");
+        return ESP_FAIL;
+    }
+
+    int wr = s->set_reg(s, (int)addr, 0xFF, (int)value);
+    int rb = s->get_reg(s, (int)addr, 0xFF);
+    ESP_LOGW(TAG, "Debug register write [0x%04lx]=0x%02lx (%s, readback %d)",
+             addr, value, wr == 0 ? "ok" : "FAILED", rb);
+
+    char json[96];
+    int len = snprintf(json, sizeof(json), "{\"addr\":\"0x%04lx\",\"written\":%ld,\"ok\":%s,\"readback\":%d}",
+                       addr, value, wr == 0 ? "true" : "false", rb);
+    return reg_send_json(req, json, len);
 }
 
 // ========================================
@@ -1122,7 +1241,7 @@ esp_err_t start_http_server(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.core_id = 1;
     config.stack_size = 8192;
-    config.max_uri_handlers = 10;
+    config.max_uri_handlers = 12;
     config.max_open_sockets = 10;
     config.recv_wait_timeout = 5;   // 5s recv timeout to prevent WDT panics on network stall
     config.send_wait_timeout = 5;   // 5s send timeout to prevent WDT panics on network stall
@@ -1170,6 +1289,22 @@ esp_err_t start_http_server(void)
             .user_ctx  = NULL
         };
         httpd_register_uri_handler(s_server, &logs_uri);
+
+        httpd_uri_t reg_get_uri = {
+            .uri       = "/api/reg",
+            .method    = HTTP_GET,
+            .handler   = reg_get_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(s_server, &reg_get_uri);
+
+        httpd_uri_t reg_post_uri = {
+            .uri       = "/api/reg",
+            .method    = HTTP_POST,
+            .handler   = reg_post_handler,
+            .user_ctx  = NULL
+        };
+        httpd_register_uri_handler(s_server, &reg_post_uri);
 
         httpd_uri_t setup_get_uri = {
             .uri       = "/setup",

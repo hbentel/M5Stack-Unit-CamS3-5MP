@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`/api/reg` sensor register debug endpoint** — read one register, dump up to
+  256, or write one and read it back, for black-box exploration of the PY260
+  register map without a datasheet. Protected by the Coredump Token when set.
+
 ### Changed
 
 - **Full frame rate to Frigate** — the 5,760 B default TCP send buffer capped a
@@ -21,6 +27,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **SCCB read errors looked like `0xFF`** — `SCCB_Read16` now returns `-1` on a
+  bus error, so `set_reg`'s error check works and register dumps can't mistake a
+  failed read for data.
 - **Image settings applied at their minimum, not neutral** — `main.c` assumed an
   OV-style −2..+2 scale with 0 = normal, but the PY260 driver takes 0-based level
   indices with mid-range defaults. Every boot set brightness −4 and contrast and

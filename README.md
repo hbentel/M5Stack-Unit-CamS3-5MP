@@ -213,7 +213,7 @@ http://<device-ip>/setup
 | MQTT Password | Leave blank if broker has no auth | _(empty)_ |
 | Device ID | MQTT topic prefix, HA entity prefix, and mDNS hostname (`<id>.local`) | `unitcams3` |
 | OTA Token | If set, MQTT `ota/set` requires JSON `{"url":"...","token":"<this>"}` | _(empty — auth disabled)_ |
-| Coredump Token | If set, `GET /api/coredump` requires `Authorization: Bearer <this>` | _(empty — auth disabled)_ |
+| Coredump Token | If set, `GET /api/coredump` and `/api/reg` require `Authorization: Bearer <this>` | _(empty — auth disabled)_ |
 | Enable MQTT | Toggle MQTT on/off | enabled |
 | Camera Resolution | QVGA / VGA / HD / UXGA | VGA (640×480) |
 | JPEG Quality | High / Default / Low (the PY260's three compression levels) | Default |
@@ -359,6 +359,8 @@ All topics use the **Device ID** as a prefix (default: `unitcams3`).
 | 80 | `GET /stats` | JSON: camera FPS counters, Wi-Fi RSSI, memory |
 | 80 | `GET /api/coredump` | Download last crash dump (ELF format); requires `Authorization: Bearer <token>` if Coredump Token is configured |
 | 80 | `GET /api/logs` | Full boot + runtime log as plain text (16 KB PSRAM ring buffer) |
+| 80 | `GET /api/reg?addr=0xNNNN` / `?start=0xNNNN&count=N` | Debug: read PY260 sensor register(s) as JSON (`-1` = read error); Coredump Token applies |
+| 80 | `POST /api/reg` (`addr=0xNNNN&value=N`) | Debug: write a sensor register and read it back. Writing `0x01` to `0x0102` soft-resets the sensor |
 | 81 | `GET /stream` | MJPEG stream (used by Frigate) |
 
 ### Setup Page

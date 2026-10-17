@@ -156,7 +156,7 @@ int SCCB_Write(uint8_t slv_addr, uint8_t reg, uint8_t data)
     return ret == ESP_OK ? 0 : -1;
 }
 
-uint8_t SCCB_Read16(uint8_t slv_addr, uint16_t reg)
+int SCCB_Read16(uint8_t slv_addr, uint16_t reg)
 {
     uint8_t data=0;
     esp_err_t ret = ESP_FAIL;
@@ -179,7 +179,8 @@ uint8_t SCCB_Read16(uint8_t slv_addr, uint16_t reg)
     ret = i2c_master_cmd_begin(sccb_i2c_port, cmd, 1000 / portTICK_RATE_MS);
     i2c_cmd_link_delete(cmd);
     if(ret != ESP_OK) {
-        ESP_LOGE(TAG, "W [%04x]=%02x fail\n", reg, data);
+        ESP_LOGE(TAG, "R [%04x] fail", reg);
+        return -1;
     }
     return data;
 }
