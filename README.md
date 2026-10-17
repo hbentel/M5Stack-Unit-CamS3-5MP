@@ -37,8 +37,8 @@ The device IP is printed to the serial monitor on boot and is shown on the `/set
 
 ## Features
 
-- **Zero-copy MJPEG streaming** over HTTP (port 81 `/stream`) — up to 5 simultaneous
-  clients; atomic reference counting means all workers share one PSRAM buffer with no
+- **Zero-copy MJPEG streaming** over HTTP (port 81 `/stream`) — the full ~9.4 fps to
+  up to 2 simultaneous clients (use go2rtc to fan out to more); atomic reference counting means all workers share one PSRAM buffer with no
   per-client copy; pull-based pacing so each client runs at its own natural rate
 - **Optimized snapshots** over HTTP (port 80 `/`) — reuses the live stream frame when
   the broadcaster is active; zero hardware contention with the stream

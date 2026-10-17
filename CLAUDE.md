@@ -44,7 +44,7 @@ PY260 sensor → GDMA → PSRAM frame buffers (4×~512KB)
                     - signals active worker tasks
                            ↓
                     mjpeg_client_worker_task (Core 1)
-                    - 1 task per connection (max 5)
+                    - 1 task per connection (max 2 — each holds a 14.4 KB TCP send buffer in internal RAM)
                     - sends from frame_pool to socket
                            ↓
                     Frigate / Browser MJPEG client

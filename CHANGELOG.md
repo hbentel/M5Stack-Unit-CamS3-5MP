@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Full frame rate to Frigate** — the 5,760 B default TCP send buffer capped a
+  ~140 KB-per-frame stream at ~0.8 MB/s over Wi-Fi (~7.4 ms RTT), so clients got
+  5.8 of the sensor's 9.4 fps. The buffer is now 14,400 B (10 × MSS), which
+  measured 9.4 fps delivered at 16 × MSS.
+- **Max simultaneous streams 5 → 2** — each streaming socket keeps its send
+  buffer full in internal RAM; a 4-viewer stress test at 16 × MSS dropped free
+  internal RAM to 14 KB. Two streams keep the worst case above the 40 KB
+  low-heap alarm. Use go2rtc to fan out to more viewers. Stream worker stacks
+  reduced 8 → 5 KB (measured peak ~2.9 KB).
+
 ### Fixed
 
 - **Image settings applied at their minimum, not neutral** — `main.c` assumed an

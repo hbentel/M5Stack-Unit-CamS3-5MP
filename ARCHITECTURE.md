@@ -24,7 +24,7 @@ PY260 sensor → GDMA → PSRAM frame buffers (4 × ~512 KB)
                   mjpeg_client_worker_task (Core 1)
                   - grabs atomic ref to s_broadcast_fb (no copy)
                   - all workers share the same PSRAM buffer via ref count
-                  - 1 task per connection (max 5)
+                  - 1 task per connection (max 2 — each holds a 14.4 KB TCP send buffer in internal RAM)
                   - sends from frame_pool buffer directly to socket
                   - SO_SNDTIMEO (10 s) handles stalled clients gracefully
                   - frame_pool_unref() on completion → buffer returns to pool

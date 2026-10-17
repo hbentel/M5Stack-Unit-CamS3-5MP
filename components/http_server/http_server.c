@@ -43,7 +43,12 @@ typedef struct {
     int slot; // Index into s_stream_clients — used to record per-slot HWM at exit
 } mjpeg_client_t;
 
-#define MAX_STREAM_CLIENTS 5
+// Each streaming client holds a full TCP send buffer (CONFIG_LWIP_TCP_SND_BUF_DEFAULT,
+// 14.4 KB) plus its worker stack in internal RAM. Two clients keep the worst case
+// above the 40 KB low-heap alarm; put go2rtc in front to fan out to more viewers.
+#define MAX_STREAM_CLIENTS 2
+// Worker tasks peak at ~2.9 KB of stack (measured via stack_hwm in /stats).
+#define STREAM_WORKER_STACK 5120
 static mjpeg_client_t s_stream_clients[MAX_STREAM_CLIENTS];
 static uint32_t s_worker_hwm_min_words[MAX_STREAM_CLIENTS] = {0}; // min HWM per slot (0 = not yet run)
 static SemaphoreHandle_t s_clients_mutex = NULL;
@@ -580,7 +585,7 @@ static esp_err_t stream_handler(httpd_req_t *req)
     char task_name[16];
     snprintf(task_name, sizeof(task_name), "mjpeg_cl_%d", slot);
     BaseType_t res = xTaskCreatePinnedToCore(
-        mjpeg_client_worker_task, task_name, 8192,
+        mjpeg_client_worker_task, task_name, STREAM_WORKER_STACK,
         &s_stream_clients[slot], 5, &s_stream_clients[slot].task, 1);
 
     if (res != pdPASS) {
