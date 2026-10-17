@@ -27,6 +27,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Sensor reverting to 320×240 while streaming** — the PY260 falls back to its
+  default resolution 10–20 s after SCCB register reads issued while it streams,
+  and keeps streaming, so nothing in the pipeline noticed. (Confirmed on device:
+  with a 10 s register-probe watchdog it reverted on every boot; with no reads it
+  held 640×480.) The broadcaster now checks each frame's JPEG SOF dimensions and
+  reinitializes the camera after 10 wrong-size frames (`wrong_size_reinits` in
+  `/stats`); reinit runs in the broadcaster so it can't race a frame in use.
 - **Sensor silently dropped settings written right after a reset** — writes
   issued at boot or after `camera_reinit()` are ACKed on the bus but sometimes
   ignored by the PY260. Observed on device: white balance stayed Auto although

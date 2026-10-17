@@ -359,7 +359,7 @@ All topics use the **Device ID** as a prefix (default: `unitcams3`).
 | 80 | `GET /stats` | JSON: camera FPS counters, Wi-Fi RSSI, memory |
 | 80 | `GET /api/coredump` | Download last crash dump (ELF format); requires `Authorization: Bearer <token>` if Coredump Token is configured |
 | 80 | `GET /api/logs` | Full boot + runtime log as plain text (16 KB PSRAM ring buffer) |
-| 80 | `GET /api/reg?addr=0xNNNN` / `?start=0xNNNN&count=N` | Debug: read PY260 sensor register(s) as JSON (`-1` = read error); Coredump Token applies |
+| 80 | `GET /api/reg?addr=0xNNNN` / `?start=0xNNNN&count=N` | Debug: read PY260 sensor register(s) as JSON (`-1` = read error); Coredump Token applies. **Reads while streaming make the sensor revert to 320×240** (auto-recovered by a reinit) — debugging only |
 | 80 | `POST /api/reg` (`addr=0xNNNN&value=N`) | Debug: write a sensor register and read it back. Writing `0x01` to `0x0102` soft-resets the sensor |
 | 81 | `GET /stream` | MJPEG stream (used by Frigate) |
 

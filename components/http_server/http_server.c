@@ -62,6 +62,7 @@ static TaskHandle_t s_broadcaster_task_handle = NULL;
 static _Atomic uint32_t s_reinit_count = 0;     // camera_reinit() calls from broadcaster
 static _Atomic uint32_t s_frames_delivered = 0; // successful worker frame sends (all clients)
 static _Atomic uint32_t s_oversize_drops = 0;   // frames larger than a frame_pool slot
+static _Atomic uint32_t s_wrong_size_reinits = 0; // reinits because the sensor reverted its resolution
 static uint32_t s_broadcaster_hwm_words = 0;    // broadcaster stack HWM, updated every 100 frames
 
 /// FPS cap: 0 = unlimited, 1-15 = max frames/sec delivered to stream clients
@@ -266,6 +267,7 @@ static esp_err_t stats_handler(httpd_req_t *req)
             "\"active_streams\":%u,"
             "\"frames_delivered\":%lu,"
             "\"oversize_drops\":%lu,"
+            "\"wrong_size_reinits\":%lu,"
             "\"soi_hist\":[%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu]"
         "},"
         "\"wifi\":{"
@@ -296,6 +298,7 @@ static esp_err_t stats_handler(httpd_req_t *req)
         http_server_get_active_streams(),
         (unsigned long)atomic_load(&s_frames_delivered),
         (unsigned long)atomic_load(&s_oversize_drops),
+        (unsigned long)atomic_load(&s_wrong_size_reinits),
         (unsigned long)cam.soi_offset_histogram[0], (unsigned long)cam.soi_offset_histogram[1],
         (unsigned long)cam.soi_offset_histogram[2], (unsigned long)cam.soi_offset_histogram[3],
         (unsigned long)cam.soi_offset_histogram[4], (unsigned long)cam.soi_offset_histogram[5],
@@ -320,11 +323,33 @@ static esp_err_t stats_handler(httpd_req_t *req)
 // Multi-client MJPEG Tasks
 // ========================================
 
+// Read width/height from the JPEG's SOF0/SOF2 marker. Returns false if not found
+// in the first 2 KB (the PY260 puts it within the first few hundred bytes).
+static bool jpeg_dimensions(const uint8_t *buf, size_t len, uint16_t *w, uint16_t *h)
+{
+    size_t lim = len < 2048 ? len : 2048;
+    for (size_t i = 2; i + 9 < lim; i++) {
+        if (buf[i] == 0xFF && (buf[i + 1] == 0xC0 || buf[i + 1] == 0xC2)) {
+            *h = (uint16_t)((buf[i + 5] << 8) | buf[i + 6]);
+            *w = (uint16_t)((buf[i + 7] << 8) | buf[i + 8]);
+            return true;
+        }
+    }
+    return false;
+}
+
+// Consecutive wrong-size frames before the broadcaster reinitializes the camera.
+// The PY260 can revert to its default 320x240 on its own (triggered by SCCB
+// register reads while streaming) and keeps streaming, so the size in the
+// frame itself is the only reliable signal. ~1 s at 9.4 fps.
+#define WRONG_SIZE_REINIT_FRAMES 10
+
 static void mjpeg_broadcaster_task(void *arg)
 {
     ESP_LOGI(TAG, "MJPEG broadcaster task started on Core 1");
     esp_task_wdt_add(NULL);
     uint32_t fail_count = 0;
+    uint32_t wrong_size_count = 0;
 
     while (1) {
         esp_task_wdt_reset();
@@ -377,6 +402,24 @@ static void mjpeg_broadcaster_task(void *arg)
         if (fb->len < 100 || fb->buf[0] != 0xFF || fb->buf[1] != 0xD8) {
             esp_camera_fb_return(fb);
             continue;
+        }
+
+        // Sensor reverted its resolution? Reinit from here, where no frame is held
+        // by this task — reinit from another task raced cam_take() (panic).
+        uint16_t jw, jh;
+        if (jpeg_dimensions(fb->buf, fb->len, &jw, &jh) && (jw != fb->width || jh != fb->height)) {
+            if (++wrong_size_count >= WRONG_SIZE_REINIT_FRAMES) {
+                ESP_LOGE(TAG, "Broadcaster: sensor outputs %ux%u, expected %ux%u — reinit",
+                         jw, jh, (unsigned)fb->width, (unsigned)fb->height);
+                esp_camera_fb_return(fb);
+                atomic_fetch_add(&s_reinit_count, 1);
+                atomic_fetch_add(&s_wrong_size_reinits, 1);
+                camera_reinit();
+                wrong_size_count = 0;
+                continue;
+            }
+        } else {
+            wrong_size_count = 0;
         }
 
         // Copy to a new pool buffer for broadcast
@@ -701,6 +744,9 @@ static esp_err_t coredump_handler(httpd_req_t *req)
 //   GET  /api/reg?start=0x0100&count=64   → {"start":"0x0100","values":[...]}
 //   POST /api/reg  body addr=0x0125&value=2 → write, then read back
 // A value of -1 means the SCCB read failed. Writing 0x01 to 0x0102 (soft reset)
+// WARNING: SCCB reads while the sensor is streaming make the PY260 revert to its
+// default 320x240 within ~10-20 s (the broadcaster detects this and reinits), and
+// some writes have hung the module's control bus until a power cycle.
 // restores sensor defaults; a camera reinit re-applies the firmware's settings.
 
 #define REG_DUMP_MAX 256
