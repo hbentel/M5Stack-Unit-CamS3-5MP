@@ -149,6 +149,55 @@ SemaphoreHandle_t g_camera_reinit_mutex = NULL;
 static camera_status_t s_pending_restore;
 static bool s_pending_restore_valid = false;
 
+// After a reinit the PY260 finishes its own start-up a few seconds later and resets
+// some registers to defaults (measured: a restored brightness +1 held ~4 s, then
+// dropped to default). This task re-applies the user's levels once, 10 s after a
+// reinit, with plain writes (no read-back — SCCB reads while streaming make the
+// sensor revert). Skipped when everything is at the defaults.
+#define REAPPLY_DELAY_MS 10000
+static TaskHandle_t s_reapply_task = NULL;
+static camera_status_t s_reapply_levels;
+
+static bool levels_are_defaults(const camera_status_t *l)
+{
+    return l->brightness == CAM_BRIGHTNESS && l->contrast == CAM_CONTRAST &&
+           l->saturation == CAM_SATURATION && l->special_effect == CAM_SPECIAL_EFFECT &&
+           l->wb_mode == CAM_WB_MODE && l->ae_level == CAM_EXPOSURE_COMP;
+}
+
+static void reapply_task(void *arg)
+{
+    while (1) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        // A newer reinit restarts the countdown
+        while (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(REAPPLY_DELAY_MS)) != 0) {}
+
+        if (xSemaphoreTake(g_camera_reinit_mutex, 0) != pdTRUE) continue;  // reinit running
+        sensor_t *s = esp_camera_sensor_get();
+        const camera_status_t *l = &s_reapply_levels;
+        if (s) {
+            ESP_LOGI(TAG, "Re-applying image levels after sensor start-up");
+            if (s->set_brightness)     s->set_brightness(s, l->brightness);
+            if (s->set_contrast)       s->set_contrast(s, l->contrast);
+            if (s->set_saturation)     s->set_saturation(s, l->saturation);
+            if (s->set_special_effect) s->set_special_effect(s, l->special_effect);
+            if (s->set_wb_mode)        s->set_wb_mode(s, l->wb_mode);
+            if (s->set_exposure_ctrl)  s->set_exposure_ctrl(s, l->ae_level);
+        }
+        xSemaphoreGive(g_camera_reinit_mutex);
+    }
+}
+
+static void schedule_reapply(const camera_status_t *levels)
+{
+    if (!levels || levels_are_defaults(levels)) return;
+    if (!s_reapply_task) {
+        xTaskCreatePinnedToCore(reapply_task, "cam_reapply", 3072, NULL, 3, &s_reapply_task, 1);
+    }
+    s_reapply_levels = *levels;
+    xTaskNotifyGive(s_reapply_task);
+}
+
 // LED wrapper — passed to mqtt_mgr as a callback so mqtt_mgr doesn't need esp_driver_gpio
 static void led_set_level(int level)
 {
@@ -199,6 +248,7 @@ esp_err_t camera_reinit(void)
     }
 
     apply_camera_settings(have_prev ? &prev : NULL);
+    if (have_prev) schedule_reapply(&prev);
 
     // Let sensor stabilize
     vTaskDelay(pdMS_TO_TICKS(500));

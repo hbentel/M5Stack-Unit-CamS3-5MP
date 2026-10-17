@@ -59,9 +59,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Runtime setting changes** — changes from Home Assistant are now written once,
   without read-back verification (SCCB traffic while streaming can make the
   sensor revert; any write may, not only reads). A camera reinit re-applies the
-  levels in effect rather than the firmware defaults. Known issue: after a
-  reinit the restored brightness was observed back at default seconds later
-  (the sensor appears to overwrite some registers late in its own start-up).
+  levels in effect rather than the firmware defaults. The PY260 resets some
+  registers again ~5 s after a reinit (late in its own start-up), so the levels
+  are re-applied once more 10 s after a reinit (only if not at defaults).
+  Verified: HA brightness +1 survived a forced revert+reinit (default for ~10 s,
+  then restored and held).
 - **Sensor reverting to 320×240 while streaming** — the PY260 falls back to its
   default resolution 10–20 s after SCCB register reads issued while it streams,
   and keeps streaming, so nothing in the pipeline noticed. (Confirmed on device:
