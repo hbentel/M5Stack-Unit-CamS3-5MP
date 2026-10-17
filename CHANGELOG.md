@@ -29,6 +29,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Camera ran single-buffered (driver buffer leak)** — `cam_reset_and_free_frame()`
+  treated "no free buffer" as "ISR stalled" and re-armed capture from task context
+  even while a capture was in progress, hijacking the GDMA and orphaning the buffer
+  being filled. Within a few frames of boot 3 of 4 buffers (1.5 MB PSRAM) were
+  stranded and every frame depended on a task re-arming capture in time (on device:
+  0 of 189 captures ISR-armed). Recovery now requires `!capturing`, checked and
+  claimed in a critical section. After: 188/188 captures ISR-armed, 0 recovery,
+  0 NO-SOI/NO-EOI, 9.4 fps delivered.
 - **Runtime setting changes** — changes from Home Assistant are now written once,
   without read-back verification (SCCB traffic while streaming can make the
   sensor revert; any write may, not only reads). A camera reinit re-applies the

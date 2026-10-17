@@ -44,6 +44,7 @@
 
 static const char *TAG = "cam_hal";
 static cam_obj_t *cam_obj = NULL;
+static portMUX_TYPE s_cam_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static int cam_verify_jpeg_soi(const uint8_t *inbuf, uint32_t length)
 {
@@ -161,22 +162,32 @@ static void cam_reset_and_free_frame(int frame_pos)
         }
     }
     cam_obj->frames[frame_pos].en = 1;
+
+    // The check-and-claim below must not interleave with the VSYNC ISR, which also
+    // claims buffers. Callers (cam_task, broadcaster, HTTP handlers) all run on
+    // Core 1 with the ISR, so masking interrupts on this core is sufficient.
+    portENTER_CRITICAL(&s_cam_mux);
     uint32_t old = __atomic_fetch_or(&cam_obj->free_mask, (1u << frame_pos), __ATOMIC_SEQ_CST);
 
-    // Stall recovery: if free_mask was 0 before this return, the VSYNC ISR has
-    // stopped (cam_start=0 → LCD_CAM generates no more VSYNC interrupts).
-    // Simply freeing a buffer is not enough — nothing will wake the ISR.
-    // Since cam_start=0 guarantees no concurrent ISR activity, it is safe to
-    // restart the hardware from task context: claim this buffer, reset DMA,
-    // and re-arm cam_start=1 so VSYNC interrupts resume.
-    if (old == 0 && cam_obj->psram_mode && cam_obj->jpeg_mode) {
+    // Stall recovery: the VSYNC ISR stops capture (cam_start=0, capturing=false)
+    // when it finds no free buffer, and with cam_start=0 no further VSYNC
+    // interrupts arrive — so freeing a buffer alone would never wake it. Re-arm
+    // from task context in that case only.
+    //
+    // free_mask==0 by itself is NOT proof of a stall: it is also 0 while a capture
+    // is in progress and every other buffer is queued or held. The old code
+    // re-armed then too, hijacking the GDMA mid-capture and orphaning the buffer
+    // being captured into. Within a few frames of boot 3 of the 4 buffers were
+    // stranded and the camera ran single-buffered (on device: 0 of 189 captures
+    // in 20 s were ISR-armed; frames_via_recovery ~= vsync_count).
+    if (old == 0 && !cam_obj->capturing && cam_obj->psram_mode && cam_obj->jpeg_mode) {
         cam_obj->frames_via_recovery++;
         __atomic_fetch_and(&cam_obj->free_mask, ~(1u << frame_pos), __ATOMIC_SEQ_CST);
         cam_obj->cur_frame_pos = (uint8_t)frame_pos;
         cam_obj->cur_eof_cnt = 0;
-        cam_obj->capturing = false;
         ll_cam_prepare_frame(cam_obj, frame_pos);
     }
+    portEXIT_CRITICAL(&s_cam_mux);
 }
 
 // PSRAM JPEG task loop — ISR-driven frame swap, task finalizes
